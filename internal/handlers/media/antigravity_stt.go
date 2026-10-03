@@ -157,6 +157,10 @@ func (h *MediaHandler) tryAntigravitySTTConn(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	if projectID == "" {
+		projectID = chat.DefaultAntigravityProjectID
+		h.ChatH.StoreAntigravityProjectID(conn.ID, projectID)
+	}
+	if projectID == "" {
 		return fmt.Errorf("antigravity: no project ID — onboard the account in Antigravity (antigravity.google) then re-login")
 	}
 
