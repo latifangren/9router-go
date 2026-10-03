@@ -20,16 +20,12 @@ import (
 var loadCodeAssistURL = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
 var onboardUserURL = "https://cloudcode-pa.googleapis.com/v1internal:onboardUser"
 
-// DefaultAntigravityProjectID is the fallback project ID for standard consumer Antigravity accounts.
-const DefaultAntigravityProjectID = "aicode-consumers"
-
-const (
-	antigravityIDEUserAgent  = "antigravity/ide/2.11.0 darwin/arm64"
-	antigravityGoogAPIClient = "gl-node/22.21.1"
-)
+const antigravityIDEUserAgent = "antigravity/ide/2.11.0 darwin/arm64"
 
 var lcaMetadata = map[string]any{
-	"ideType": "ANTIGRAVITY",
+	"ideType":    9, // ANTIGRAVITY
+	"platform":   2, // DARWIN_ARM64
+	"pluginType": 2, // GEMINI
 }
 
 // projectNoCache short-circuits re-probing the onboarding RPCs for a token whose
@@ -122,17 +118,6 @@ func FetchAntigravityProjectID(ctx context.Context, client *http.Client, accessT
 	return fetchAntigravityProjectID(ctx, client, accessToken)
 }
 
-// ResolveAntigravityProjectID probes Google's onboarding RPCs for a projectID,
-// falling back to DefaultAntigravityProjectID ("aicode-consumers") if extractProjectID
-// finds nothing or if probe returns empty/authFailed.
-func ResolveAntigravityProjectID(ctx context.Context, client *http.Client, accessToken string) string {
-	pid, _, _ := fetchAntigravityProjectID(ctx, client, accessToken)
-	if pid != "" {
-		return pid
-	}
-	return DefaultAntigravityProjectID
-}
-
 func fetchAntigravityProjectID(ctx context.Context, client *http.Client, accessToken string) (pid string, authFailed, noProject bool) {
 	payload, err := json.Marshal(map[string]any{"metadata": lcaMetadata})
 	if err != nil {
@@ -147,14 +132,6 @@ func fetchAntigravityProjectID(ctx context.Context, client *http.Client, accessT
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("User-Agent", antigravityIDEUserAgent)
-	req.Header.Set("X-Goog-Api-Client", antigravityGoogAPIClient)
-
-	clientMetadata, err := json.Marshal(lcaMetadata)
-	if err != nil {
-		log.Error("antigravity", "marshal metadata failed", "error", err)
-		return "", false, false
-	}
-	req.Header.Set("Client-Metadata", string(clientMetadata))
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -235,17 +212,6 @@ func onboardAntigravityUser(ctx context.Context, client *http.Client, accessToke
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 		req.Header.Set("User-Agent", antigravityIDEUserAgent)
-		req.Header.Set("X-Goog-Api-Client", antigravityGoogAPIClient)
-
-		clientMetadata, err := json.Marshal(lcaMetadata)
-		if err != nil {
-			log.Error("antigravity", "marshal metadata failed", "error", err)
-			if !probeBackoffWait(ctx, attempt) {
-				return "", false, false
-			}
-			continue
-		}
-		req.Header.Set("Client-Metadata", string(clientMetadata))
 
 		resp, err := client.Do(req)
 		if err != nil {
