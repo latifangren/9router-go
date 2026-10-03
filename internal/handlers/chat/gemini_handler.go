@@ -85,11 +85,6 @@ func (h *ChatHandler) forwardGeminiNativeRequest(
 		}
 	}
 
-	if provider == "antigravity" && projectID == "" {
-		projectID = DefaultAntigravityProjectID
-		h.storeAntigravityProjectID(connectionID, projectID)
-	}
-
 	if projectID == "" {
 		// antigravity has no OpenAI-compatible endpoint without a project ID — a
 		// bare POST to cloudcode-pa.googleapis.com is a guaranteed 404. Bail with
