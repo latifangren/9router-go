@@ -705,6 +705,12 @@ func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) ([]byte, 
 			out = next
 		}
 	}
+	if h.TokenSaver.ADHDEnabled() {
+		prompt := tokensaver.GetADHDPrompt(h.TokenSaver.ADHDLevel())
+		if next, did := inject(out, prompt); did {
+			out = next
+		}
+	}
 	return out, origTokens, savedTokens, savedPct
 }
 

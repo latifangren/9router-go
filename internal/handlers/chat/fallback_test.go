@@ -102,6 +102,26 @@ func TestApplyTokenSavers_PonytailInjects(t *testing.T) {
 	}
 }
 
+func TestApplyTokenSavers_ADHDInjects(t *testing.T) {
+	h, cleanup := setupHandlerForForward(t)
+	defer cleanup()
+	h.TokenSaver.SetADHD(true)
+
+	body := []byte(`{"messages":[{"role":"user","content":"hi"}]}`)
+	got, _, _, _ := h.applyTokenSavers(body, false)
+	if !strings.Contains(string(got), "I have ADHD — action-first output") {
+		t.Errorf("expected ADHD full prompt injected, got %s", got)
+	}
+
+	// Test lite mode
+	h.TokenSaver.SetADHD(true, "lite")
+	bodyLite := []byte(`{"messages":[{"role":"user","content":"hi"}]}`)
+	gotLite, _, _, _ := h.applyTokenSavers(bodyLite, false)
+	if !strings.Contains(string(gotLite), "I have ADHD (lite)") {
+		t.Errorf("expected ADHD lite prompt injected, got %s", gotLite)
+	}
+}
+
 func TestTryForwardWithConnection_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
