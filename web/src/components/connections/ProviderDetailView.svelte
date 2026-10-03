@@ -27,6 +27,7 @@
     oauthLoopbackCallbackURL,
   } from '../../lib/oauth-handoff'
   import { getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from '../../lib/models'
+  import { copyToClipboard } from '../../lib/clipboard'
   import { notifyCustomModelsChanged } from '../../lib/customModels'
   import {
     buildAvailableModels,
@@ -1812,7 +1813,7 @@
 
   function copyAuthUrl() {
     if (!oauthAuthUrl) return
-    navigator.clipboard.writeText(oauthAuthUrl)
+    copyToClipboard(oauthAuthUrl)
     copiedAuthUrl = true
     setTimeout(() => (copiedAuthUrl = false), 2000)
   }
@@ -2085,7 +2086,7 @@
   function copyModelId(modelId: string) {
     const level = resolveThinkingSuffix(modelId)
     const full = `${storageAlias}/${modelId}${level ? `(${level})` : ''}`
-    navigator.clipboard.writeText(full)
+    copyToClipboard(full)
     copiedModelId = modelId
     setTimeout(() => (copiedModelId = null), 2000)
   }
@@ -2310,7 +2311,7 @@
   }
 
   function copyCompatibleModel(modelId: string) {
-    navigator.clipboard.writeText(`${displayAlias()}/${modelId}`)
+    copyToClipboard(`${displayAlias()}/${modelId}`)
     copiedModelId = modelId
     setTimeout(() => (copiedModelId = null), 2000)
   }
