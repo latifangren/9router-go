@@ -13,11 +13,6 @@ import (
 	"9router/proxy/internal/handlerutil"
 )
 
-var (
-	proxyPrimaryProbeURL   = "https://www.google.com/generate_204"
-	proxySecondaryProbeURL = "https://cloudflare.com/cdn-cgi/trace"
-)
-
 // countProxyPoolBindings counts provider connections bound to the given pool,
 // checking both the top-level proxyPoolId and providerSpecificData.proxyPoolId.
 func (h *DashboardHandler) countProxyPoolBindings() map[string]int {
@@ -204,8 +199,17 @@ func (h *DashboardHandler) HandleTestProxyPool(w http.ResponseWriter, r *http.Re
 	// headers. Dialing them via http.ProxyURL breaks with
 	// "malformed HTTP status code", so they get the upstream relay test.
 	if pool.IsEdgeRelay() {
-		h.testRelayPool(w, id, targetURL)
+		h.testRelayPool(w, r, id, targetURL)
 		return
+	}
+
+	primaryProbeURL := h.PrimaryProbeURL
+	if primaryProbeURL == "" {
+		primaryProbeURL = DefaultPrimaryProbeURL
+	}
+	secondaryProbeURL := h.SecondaryProbeURL
+	if secondaryProbeURL == "" {
+		secondaryProbeURL = DefaultSecondaryProbeURL
 	}
 
 	start := time.Now()
@@ -221,14 +225,30 @@ func (h *DashboardHandler) HandleTestProxyPool(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	tr := &http.Transport{
+		Proxy:             http.ProxyURL(proxyParsed),
+		DisableKeepAlives: true,
+	}
+	defer tr.CloseIdleConnections()
+
 	client := &http.Client{
-		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyParsed),
-		},
-		Timeout: 5 * time.Second,
+		Transport: tr,
+		Timeout:   5 * time.Second,
 	}
 
-	resp, err := client.Get(proxyPrimaryProbeURL)
+	reqPrimary, err := http.NewRequestWithContext(r.Context(), http.MethodGet, primaryProbeURL, nil)
+	if err != nil {
+		_ = h.Repo.SetProxyPoolStatus(id, "failed", 0)
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"success": false,
+			"status":  "failed",
+			"latency": int64(0),
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	resp, err := client.Do(reqPrimary)
 	latencyMs := time.Since(start).Milliseconds()
 
 	// Primary probe succeeded
@@ -249,7 +269,19 @@ func (h *DashboardHandler) HandleTestProxyPool(w http.ResponseWriter, r *http.Re
 
 	// Primary probe failed or timed out. Attempt secondary probe to avoid false negatives when Google is blocked.
 	secStart := time.Now()
-	respSec, errSec := client.Get(proxySecondaryProbeURL)
+	reqSec, errReqSec := http.NewRequestWithContext(r.Context(), http.MethodGet, secondaryProbeURL, nil)
+	if errReqSec != nil {
+		_ = h.Repo.SetProxyPoolStatus(id, "failed", 0)
+		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
+			"success": false,
+			"status":  "failed",
+			"latency": int64(0),
+			"error":   errReqSec.Error(),
+		})
+		return
+	}
+
+	respSec, errSec := client.Do(reqSec)
 	if errSec == nil && respSec != nil && respSec.StatusCode < 400 {
 		_ = respSec.Body.Close()
 		latencyMs = time.Since(secStart).Milliseconds()
@@ -267,9 +299,8 @@ func (h *DashboardHandler) HandleTestProxyPool(w http.ResponseWriter, r *http.Re
 	}
 
 	// Both probes failed
-	latencyMs = time.Since(start).Milliseconds()
 	status := "failed"
-	_ = h.Repo.SetProxyPoolStatus(id, status, latencyMs)
+	_ = h.Repo.SetProxyPoolStatus(id, status, 0)
 	errStr := "connection timed out or failed"
 	if errSec != nil {
 		errStr = errSec.Error()
@@ -279,7 +310,7 @@ func (h *DashboardHandler) HandleTestProxyPool(w http.ResponseWriter, r *http.Re
 	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
 		"success": false,
 		"status":  status,
-		"latency": latencyMs,
+		"latency": int64(0),
 		"error":   errStr,
 	})
 }
@@ -287,7 +318,7 @@ func (h *DashboardHandler) HandleTestProxyPool(w http.ResponseWriter, r *http.Re
 // testRelayPool tests a deploy-relay pool (vercel/cloudflare/deno) the way
 // upstream does: a plain GET to the relay URL with x-relay-target and
 // x-relay-path headers (mirrors testVercelRelay in the Next.js dashboard).
-func (h *DashboardHandler) testRelayPool(w http.ResponseWriter, id, relayURL string) {
+func (h *DashboardHandler) testRelayPool(w http.ResponseWriter, r *http.Request, id, relayURL string) {
 	start := time.Now()
 	finish := func(ok bool, errStr string) {
 		latencyMs := time.Since(start).Milliseconds()
@@ -296,6 +327,7 @@ func (h *DashboardHandler) testRelayPool(w http.ResponseWriter, id, relayURL str
 		if !ok {
 			status = "failed"
 			lastError = errStr
+			latencyMs = 0
 		}
 		_ = h.Repo.UpdateProxyPool(id, map[string]any{
 			"testStatus":   status,
@@ -311,14 +343,21 @@ func (h *DashboardHandler) testRelayPool(w http.ResponseWriter, id, relayURL str
 		handlerutil.WriteJSON(w, http.StatusOK, body)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, relayURL, nil)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, relayURL, nil)
 	if err != nil {
 		finish(false, "invalid relay URL format")
 		return
 	}
 	req.Header.Set("x-relay-target", "https://httpbin.org")
 	req.Header.Set("x-relay-path", "/get")
-	client := &http.Client{Timeout: 10 * time.Second}
+	tr := &http.Transport{
+		DisableKeepAlives: true,
+	}
+	defer tr.CloseIdleConnections()
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   10 * time.Second,
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		msg := err.Error()
