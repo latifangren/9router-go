@@ -489,7 +489,7 @@
       const dead = deadIds.length
       confirmState = {
         title: 'Disable Dead Proxies',
-        message: `Alive: ${alive}, Dead: ${dead}.\n\nDisable ${dead} dead proxies?`,
+        message: `Alive: ${alive}, Dead: ${dead}.\n\nDisable ${dead} dead ${dead === 1 ? 'proxy' : 'proxies'}?`,
         confirmText: 'Disable Dead',
         onConfirm: async () => {
           confirmState = null
