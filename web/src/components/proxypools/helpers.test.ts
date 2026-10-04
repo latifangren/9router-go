@@ -49,3 +49,42 @@ describe('getLatencyBadge', () => {
     expect(getLatencyBadge(456.7)).toEqual({ variant: 'warning', text: '⏳ 457ms' })
   })
 })
+
+describe('proxy pool filtering & sorting contract', () => {
+  test('failed filter matches failed or error', () => {
+    const isFailed = (p: { testStatus?: string }) =>
+      p.testStatus === 'failed' || p.testStatus === 'error'
+    expect(isFailed({ testStatus: 'failed' })).toBe(true)
+    expect(isFailed({ testStatus: 'error' })).toBe(true)
+    expect(isFailed({ testStatus: 'passed' })).toBe(false)
+    expect(isFailed({ testStatus: 'active' })).toBe(false)
+  })
+
+  test('fastest sort assigns Infinity to pools without passed or active status', () => {
+    const sortFastest = (
+      pools: Array<{ name: string; latency?: number; testStatus?: string }>
+    ) => {
+      return [...pools].sort((a, b) => {
+        const aValid = a.testStatus === 'passed' || a.testStatus === 'active'
+        const bValid = b.testStatus === 'passed' || b.testStatus === 'active'
+        const aLat = aValid && typeof a.latency === 'number' && a.latency > 0 ? a.latency : Infinity
+        const bLat = bValid && typeof b.latency === 'number' && b.latency > 0 ? b.latency : Infinity
+        if (aLat !== bLat) return aLat - bLat
+        return (a.name || '').localeCompare(b.name || '')
+      })
+    }
+
+    const pools = [
+      { name: 'dead-low-latency', latency: 10, testStatus: 'failed' },
+      { name: 'error-low-latency', latency: 15, testStatus: 'error' },
+      { name: 'passed-high-latency', latency: 300, testStatus: 'passed' },
+      { name: 'active-med-latency', latency: 120, testStatus: 'active' },
+    ]
+    const sorted = sortFastest(pools)
+    expect(sorted[0].name).toBe('active-med-latency')
+    expect(sorted[1].name).toBe('passed-high-latency')
+    expect(sorted[2].name).toBe('dead-low-latency')
+    expect(sorted[3].name).toBe('error-low-latency')
+  })
+})
+

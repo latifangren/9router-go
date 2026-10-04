@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func TestHandleTestProxyPool_FallbackProbe(t *testing.T) {
@@ -23,8 +25,6 @@ func TestHandleTestProxyPool_FallbackProbe(t *testing.T) {
 	);`); err != nil {
 		t.Fatalf("failed to create proxyPools table: %v", err)
 	}
-
-	router := setupTestRouter(repo)
 
 	var primaryHits int32
 	var secondaryHits int32
@@ -55,15 +55,11 @@ func TestHandleTestProxyPool_FallbackProbe(t *testing.T) {
 	}))
 	defer probeServer.Close()
 
-	oldPrimary := proxyPrimaryProbeURL
-	oldSecondary := proxySecondaryProbeURL
-	defer func() {
-		proxyPrimaryProbeURL = oldPrimary
-		proxySecondaryProbeURL = oldSecondary
-	}()
-
-	proxyPrimaryProbeURL = probeServer.URL + "/primary"
-	proxySecondaryProbeURL = probeServer.URL + "/secondary"
+	h := NewDashboardHandler(repo)
+	h.PrimaryProbeURL = probeServer.URL + "/primary"
+	h.SecondaryProbeURL = probeServer.URL + "/secondary"
+	router := chi.NewRouter()
+	RegisterRoutes(router, h)
 
 	// Helper to create a proxy pool
 	createPool := func(name, url string) string {
@@ -173,12 +169,21 @@ func TestHandleTestProxyPool_FallbackProbe(t *testing.T) {
 		if atomic.LoadInt32(&primaryHits) != 1 || atomic.LoadInt32(&secondaryHits) != 1 {
 			t.Fatalf("expected both primary and secondary to be attempted")
 		}
+		lat, ok := res["latency"].(float64)
+		if !ok || lat != 0 {
+			t.Fatalf("expected latency 0 when both probes fail, got %v", res["latency"])
+		}
 
 		// Verify DB status
-		var testStatus string
-		_ = repo.RawDB().QueryRow("SELECT testStatus FROM proxyPools WHERE id = ?", poolID).Scan(&testStatus)
-		if testStatus != "failed" {
-			t.Fatalf("expected testStatus 'failed' in DB, got %s", testStatus)
+		var testStatus, dataStr string
+		err := repo.RawDB().QueryRow("SELECT testStatus, data FROM proxyPools WHERE id = ?", poolID).Scan(&testStatus, &dataStr)
+		if err != nil || testStatus != "failed" {
+			t.Fatalf("expected testStatus 'failed' in DB, got %s (err: %v)", testStatus, err)
+		}
+		var dataMap map[string]any
+		_ = json.Unmarshal([]byte(dataStr), &dataMap)
+		if dataLat, ok := dataMap["latency"].(float64); !ok || dataLat != 0 {
+			t.Fatalf("expected DB latency 0 for failed pool, got %v", dataMap["latency"])
 		}
 	})
 
