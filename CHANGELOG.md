@@ -1,6 +1,126 @@
 # Changelog
 
 ## [Unreleased]
+### 🩹 Test live upstream dipisah dari CI lewat opt-in eksplisit
+
+19 test di `internal/handlers/chat/` memanggil provider sungguhan dengan
+kredensial asli dari `~/.9router/db/data.sqlite`, dan semuanya ikut
+`go test ./...` yang dijalankan CI. Modelnya free-tier dan dipakai bersama:
+`oc/space-bunny-free` dan `muse-spark-*-contributor-free` membatasi rate per IP
+dan sering sudah habis dipakai pengguna lain. Akibatnya `space-bunny-free`
+gagal di `go test -race ./...` dengan `upstream error: Forward...` — kegagalan
+yang sama sekali tidak ada hubungannya dengan gateway ini. Yang lebih buruk,
+tanpa kredensial CI test itu akan "lolos" sambil tidak membuktikan apa pun.
+
+Sekarang kelas test dibedakan oleh opt-in `9ROUTER_LIVE_TESTS=1`, bukan oleh
+skip per-status. Gerbangnya `requireLiveUpstream`, dipanggil di dalam
+`getRealUserDB` yang sudah dilewati setiap test live — sehingga test live baru
+yang lupa memasang gerbang tetap skip, bukan bocor ke CI. Lima test
+`muse_spark_*` tidak lewat `getRealUserDB` (koneksi opencode-nya tidak di-seed,
+jadi modelnya resolve langsung ke provider) dan memasang gerbangnya sendiri.
+`make test-live` adalah pembungkus untuk menjalankannya lokal.
+
+Sembilan pola `if rec.Code == http.StatusTooManyRequests || ...` yang ditulis
+ulang bergantian per test kini satu helper `requireLiveOK`/`requireLiveSSE`, dan
+`upstreamUnavailable` dilebarkan ke 429/403/402/502/503/504 — status yang berarti
+"belum sekarang", bukan cacat gateway. Setiap skip membawa body jawaban
+provider, jadi run lokal tetap memberi tahu apa sebenarnya yang upstream said.
+400 dan 500 tetap gagal, karena itu kesalahan gateway. 401 sengaja dipisah: itu
+masalah profil lokal, bukan pemadaman provider.
+
+### 🐛 `TestGateAcquire_JitterOnlyWidensTheGap` flaky — floor 30ms tanpa margin
+
+PR #146 memperbaiki `TestGateAcquire_SpacesConcurrentCallers` dengan mengukur
+rentang burst, dan sengaja tidak menyentuh `JitterOnlyWidensTheGap` karena
+"tidak ada bukti ia perlu disentuh". Bukti itu sekarang ada: di branch ini,
+sebelum perubahan, tes itu gagal sendiri —
+
+```
+fetchgate (24 passed, 1 failed)
+  [FAIL] TestGateAcquire_JitterOnlyWidensTheGap
+     gate_test.go:100: slot 2 waited 29.7696ms, want at least 30ms floor
+```
+
+Akar masalahnya sama: floor 30ms diukur dengan stopwatch dan jitter sah
+bernilai 0, jadi grant berikutnya jatuh tepat 30ms — tanpa sisa untuk menyerap
+bangunnya goroutine yang terlambat. Assertion-nya tetap per-gap: span akan
+sembunyikan floor yang setengah — jitter acak yang cukup dermawan bisa
+memperpanjang total melebihi target sementara setiap gap-nya pendek. Tapi
+minGap dinaikkan ke 40ms dengan jitter 60ms supaya ada margin.
+
+`internal/fetchgate/gate.go` tidak tersentuh — nol perubahan produksi.
+
+### 🐛 `internal/fetchgate` flaky di `go test -p 16` — gap diukur salah
+
+`TestGateAcquire_SpacesConcurrentCallers` gagal 4 dari 5 run pada
+`go test ./... -p 16`, di index yang konsisten (2, 3, 7) dengan gap
+12–35ms terhadap floor 40ms. Gate-nya sendiri tidak salah: yang diukur
+adalah "kapan goroutine ini sempat jalan", bukan "kapan slot-nya
+dibuka". Sebuah slot yang dibuka tepat waktu tetap bisa menunggu
+8ms lagi untuk dijadwalkan di CPU yang sibuk, dan itu ikut terhitung
+di `time.Since(start)`.
+
+Membandingkan start time berurutan berarti membandingkan nasib penjadwalan
+dua goroutine yang berbeda. Satu yang cepat bersebelahan dengan satu yang
+lambat terbaca seperti dua slot diberikan sekaligus — itu sebabnya
+index yang gagal selalu di tengah-tengah, bukan di ujung.
+
+Assertion-nya diganti dari "tiap gap ≥ 40ms" jadi "rentang 8 pemanggil
+≥ 280ms". Noise penjadwalan bersifat nol-terhadap-jumlah di sekeliling
+loop, jadi penjumlahan gap menghilangkannya: delapan slot dengan floor
+40ms selalu membentang ≥ 280ms, sedangkan gate yang membagikan
+semuanya sekaligus membentang beberapa mikrosecond berapa pun padatnya CPU.
+
+Kekuatan test tidak berkurang. Dicoba dengan pacing dilepas dari
+`reserve()`, ia gagal persis di tempat yang seharusnya:
+
+```
+--- FAIL: TestGateAcquire_SpacesConcurrentCallers
+    gate_test.go:82: 8 callers spanned 0s end to end, want at least 280ms
+```
+
+`TestGateAcquire_JitterOnlyWidensTheGap` **tidak** diubah: meski ikut
+muncul di beberapa run paralel, ia tidak muncul sekali pun dalam 5 run
+baseline di `-p 16`, dan ia mengukur satu pemanggil sehingga noise-nya
+satu arah (selalu ≥, tidak pernah <). Tidak ada bukti ia perlu
+disentuh, jadi tidak.
+
+**Verifikasi:** `go vet ./...` bersih; `go build ./...` bersih;
+`go test ./internal/fetchgate/ -count=10 -race` hijau; `go test ./...`
+hijau; `go test ./... -p 16` hijau 4 dari 4 run, sebelumnya gagal 4 dari
+5.
+
+### 🐛 `go test -shuffle` gagal di `internal/app` — test order-dependent
+
+`db.InitGlobalDatabase` hanya mengizinkan satu connection database per proses
+lewat `sync.Once`, dan hook `OnStop` dari `app.DatabaseModule` menutup
+connection itu untuk selamanya. Di produksi itu benar: satu proses berarti
+satu gateway, dan boot kedua akan diam-diam membuka file SQLite yang sama di
+balik pool connection yang pertama. Di test, kombinasi itu membuat seluruh
+`internal/app` order-dependent: test yang boot pertama mengklaim satu-satunya
+handle global, hook `OnStop`-nya menutupnya, dan setiap boot berikutnya
+mengambil handle yang sudah tertutup. Di `origin/main`, seed shuffle 1 sampai
+6 semuanya gagal; setelah patch ini, 10 seed hijau.
+
+`sync.Once` diganti dengan mutex plus handle, lalu ditambahkan
+`ResetGlobalDatabaseForTest` untuk mengembalikan keadaan proses ke nol sebelum
+dan sesudah test yang boot `DatabaseModule`. Polanya mengikuti
+`shutdown.TestReset` yang sudah ada di paket sebelah. Reset hanya dipakai
+test; produksi tidak pernah memanggilnya, karena menutup satu-satunya
+connection di tengah proses justru kegagalan yang ada untuk dicegah.
+
+`TestGlobalDatabase` sekarang juga menguji hal yang sebelumnya tidak diuji:
+boot kedua dengan path berbeda harus memakai kembali handle yang sama, bukan
+membuka pool kedua pada satu file. Dan regression test baru
+`TestDatabaseModule_SecondBootAfterAFirstOneWasClosed` melakukan boot dua kali
+berturut-turut; dicoba tanpa reset, ia gagal tepat dengan pesan
+`first boot is not usable: sql: database is closed`.
+
+**Verifikasi:** `go vet ./...` bersih; `go build ./...` bersih;
+`go test ./internal/app/ ./internal/db/ -shuffle=<1..10>` hijau semua;
+`go test -race` pada kedua paket dengan shuffle hijau; `go test ./...` hijau;
+`go test -tags=integration ./internal/integration/...` hijau.
+
 ### 🐛 Deploy Vercel/Deno/Cloudflare Relay dashboard 401 — issue #140
 
 Ketiga endpoint deploy relay didaftarkan di `SetupRoutes`
@@ -47,6 +167,14 @@ dan anonymous tetap 401. Test dibuktikan gagal pada wiring lama (405 di kedua
 path). `internal/handlers/media/deploy_test.go` — status terminal melewati
 polling tanpa request, `failed` di tengah poll berhenti di panggilan pertama.
 `go vet ./...` dan `go vet -tags=integration ./internal/integration/...` bersih.
+
+### 🐛 PRAGMA SQLite per-connection diaplikasikan via driver DSN — issue #139
+
+Sebelumnya PRAGMA (`busy_timeout`, `synchronous`, `temp_store`, `mmap_size`, `cache_size`, `foreign_keys`) dieksekusi via `db.Exec()`, yang hanya memengaruhi satu koneksi awal. Akibatnya 3 dari 4 koneksi pada pool berjalan dengan pengaturan default (`busy_timeout=0`), sehingga rentan terhadap `SQLITE_BUSY` saat write contention. Pengaturan per-koneksi kini dipindahkan ke driver DSN `modernc.org/sqlite` (`_pragma=...`) agar otomatis berlaku untuk setiap koneksi baru di pool, `PRAGMA journal_mode = WAL;` tetap dipertahankan post-open, dan `SetMaxIdleConns` diselaraskan ke 4.
+
+**Catatan `foreign_keys`:** sebelum perubahan ini `PRAGMA foreign_keys = ON` hanya berlaku pada satu koneksi, sehingga 3 dari 4 koneksi berjalan tanpa enforce. Sekarang seluruh koneksi pool benar-benar menegakkan FK. Schema core upstream v0.5.85 (termasuk `upstream_leases`) tidak mendeklarasikan constraint `FOREIGN KEY` — `grep REFERENCES` di repo nol match — sehingga tidak ada baris yang bisa ditolak oleh perubahan ini. Jika constraint FK ditambahkan di kemudian hari, jalur tulis yang selama ini diam-diam melanggar integritas referensial akan mulai gagal; itu memang hasil yang benar, tetapi harus dicatat sebagai perubahan semantik, bukan sekadar perbaikan konfigurasi.
+
+**Verifikasi:** Unit test `TestPooledConnectionsPragma` di `internal/db/client_test.go` memverifikasi seluruh PRAGMA pada semua (4) koneksi aktif di connection pool. `TestSQLiteDSN` memverifikasi bentuk DSN (daftar `_pragma`, pemisah `?` vs `&`, dan absennya `journal_mode`) tanpa membuka database. Reproduksi konkurensi (8 writer × 40 write, throwaway) gagal 64/320 dengan `SQLITE_BUSY` pada kode lama dan 0/320 pada kode ini, 5× berturut-turut — mode combo lintas provider dengan round-robin memang menghasilkan write paralel seperti itu.
 
 ### 🔒 Proteksi pprof di balik `RequireAdminAuth` saat `PPROF_ENABLED=true` — issue #126
 
@@ -386,6 +514,69 @@ Perilaku yang dipertahankan: nama combo di pool vision tetap tidak memenuhi hard
 cap, karena `modelSatisfies` upstream memecah pada `/` dengan cara yang sama. Pool
 hanya menerima model vision, bukan combo — jadi combo utama yang tidak mendukung
 vision tidak dialihkan ke "combo vision", dan memang tidak bisa begitu di upstream.
+
+### 🔒 `http.Server` tanpa batas koneksi — rentan Slowloris — issue #124
+
+`ProvideServer` membangun `http.Server` hanya dengan `Addr` dan `Handler`, jadi
+`ReadHeaderTimeout` dan `IdleTimeout` sama-sama nol: klien yang membuka soket
+lalu mengirim header byte-per-byte menahan satu file descriptor tanpa ujung,
+dan koneksi yang ditinggalkan di pool keep-alive tidak pernah diserap. Bahaya
+pada konfigurasi ini bukan hipotesis — repo ini punya dua jalur expose ke
+internet (`internal/auth/tunnel.go` untuk tailscale funnel,
+`internal/handlers/media/deploy.go` untuk deploy Cloudflare tunnel / Vercel /
+Deno), jadi "cuma jalan di localhost" tidak berlaku.
+
+Kini `ReadHeaderTimeout: 10s` dan `IdleTimeout: 120s`. Nilai 10 detik bukan
+angka tebakan: itu sudah dipakai listener OAuth callback di
+`internal/proxy/oauth/codex_proxy.go`, jadi sekarang satu konvensi berlaku di
+kedua tempat. Nilainya sengaja **tidak** dibuat configurable lewat `.env` —
+limit inilah yang menahan satu koneksi, jadi membukanya lewat konfigurasi
+berarti menyerahkan kendali Slowloris ke siapa pun yang bisa mengedit file
+tersebut.
+
+`MaxHeaderBytes: 1 MiB` ikut dipasang, tapi ia **bukan** bagian dari lubang
+Slowloris: `net/http` sudah menolak blok header tanpa batas, karena `Server`
+yang bernilai nol jatuh ke `http.DefaultMaxHeaderBytes` (1 MiB), jadi nilai
+yang benar-benar ditegakkan sama saja. Mematkannya berfungsi sebagai pernyataan
+— batasnya adalah keputusan repo ini, bukan default stdlib yang belum pernah
+direview di sini.
+
+`WriteTimeout` tetap nol dengan alasan yang sekarang tertulis di kode:
+`internal/proxy/stall.go` mengizinkan satu stream SSE diam sampai
+`DefaultStallTimeout` (6 menit), dan deadline pada penulisan akan memutus
+stream tersebut di tengah respons — termasuk SSE usage/console-log untuk
+dashboard dan socket WebSocket Gemini Live. `IdleTimeout` aman karena hanya
+berlaku ke koneksi keep-alive yang **tidak** sedang melayani request.
+
+**Verifikasi:** `go vet ./...` bersih; `go test ./... -count=1` hijau;
+`go test -tags=integration -race -count=1 ./internal/integration/...` hijau.
+Test baru `TestServer_ConnectionLimitsAreEnforced` boot `ServerModule` lewat fx
+dan menguji batas yang dibangun `ProvideServer` sungguhan — ia gagal di
+`origin/main` dengan `ReadHeaderTimeout` dan `IdleTimeout` bernilai nol, dan
+lulus setelah patch ini.
+
+Bukti bahwa batas ini tidak memutus model yang lambat, sekarang jadi test:
+`TestServer_SlowStreamingRequestSurvivesTheLimits` menjalankan handler yang
+mengunggah header dalam lima potongan jeda, diam 400ms sebelum byte pertama,
+lalu meneteskan chunk selama ~2,4 detik — semua harus sampai. Test ini
+diperiksa dua arah: ia **gagal** kalau `WriteTimeout` diisi 2 detik, dengan
+chunk terakhir hilang tepat di tengah stream, dan lulus pada konfigurasi yang
+benar. Versi pertama handler-nya hanya berjalan 1,6 detik sehingga deadline 2
+detik sempat cukup dan negatifnya lolos — durasi stream sekarang sengaja
+melampaui ambang itu.
+
+Jadi batas yang dipasang hanya berlaku **sebelum** dan **sesudah** ada request,
+tidak pernah di tengah stream.
+
+> Catatan: pada satu run `go test ./...`, `TestGateAcquire_SpacesConcurrentCallers`
+> dan dua test di `usage_throttle_test.go` gagal dengan pesan
+> `want >= 40ms`. Keduanya mengukur jarak waktu dengan `time.Sleep`, dan diff ini
+> tidak menyentuh `internal/fetchgate` maupun `internal/handlers/dashboard` —
+> `usage_throttle_test.go` memanggil `router.ServeHTTP` dengan
+> `httptest.NewRecorder()`, jadi tidak pernah melewati `http.Server` sama sekali.
+> Run ulang pada branch ini (`-count=3` di `-p 1` dan `-p 16`, plus dua run
+> penuh `go test ./...`) semuanya hijau, jadi ini kontensi CPU pada run paralel,
+> bukan regresi.
 
 ### 🐛 Rotasi round-robin macet: stempel `lastUsedAt` tidak pernah maju — issue #107
 
