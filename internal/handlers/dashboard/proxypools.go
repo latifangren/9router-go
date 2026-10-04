@@ -1,8 +1,10 @@
 package dashboard
 
 import (
+	"context"
 	json "encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -184,13 +186,7 @@ func (h *DashboardHandler) HandleTestProxyPool(w http.ResponseWriter, r *http.Re
 
 	targetURL := pool.NextURL()
 	if targetURL == "" {
-		_ = h.Repo.SetProxyPoolStatus(id, "failed", 0)
-		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
-			"success": false,
-			"status":  "failed",
-			"latency": int64(0),
-			"error":   "no proxy URLs configured",
-		})
+		h.writeProbeResult(w, id, false, 0, "no proxy URLs configured")
 		return
 	}
 
@@ -203,25 +199,9 @@ func (h *DashboardHandler) HandleTestProxyPool(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	primaryProbeURL := h.PrimaryProbeURL
-	if primaryProbeURL == "" {
-		primaryProbeURL = DefaultPrimaryProbeURL
-	}
-	secondaryProbeURL := h.SecondaryProbeURL
-	if secondaryProbeURL == "" {
-		secondaryProbeURL = DefaultSecondaryProbeURL
-	}
-
-	start := time.Now()
 	proxyParsed, err := url.Parse(targetURL)
 	if err != nil {
-		_ = h.Repo.SetProxyPoolStatus(id, "failed", 0)
-		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
-			"success": false,
-			"status":  "failed",
-			"latency": int64(0),
-			"error":   "invalid proxy URL format",
-		})
+		h.writeProbeResult(w, id, false, 0, "invalid proxy URL format")
 		return
 	}
 
@@ -230,89 +210,100 @@ func (h *DashboardHandler) HandleTestProxyPool(w http.ResponseWriter, r *http.Re
 		DisableKeepAlives: true,
 	}
 	defer tr.CloseIdleConnections()
-
 	client := &http.Client{
 		Transport: tr,
 		Timeout:   5 * time.Second,
 	}
 
-	reqPrimary, err := http.NewRequestWithContext(r.Context(), http.MethodGet, primaryProbeURL, nil)
+	// Dual probe: some networks block Google, which would report a working
+	// proxy as dead. Fall back to a Cloudflare endpoint before giving up. The
+	// reported latency always belongs to the attempt that decided the
+	// outcome, so a slow primary failure never inflates a fast fallback.
+	ok, latencyMs, primaryErr := probeViaProxy(r.Context(), client, h.primaryProbeURL())
+	if ok {
+		h.writeProbeResult(w, id, true, latencyMs, "")
+		return
+	}
+
+	ok, latencyMs, secondaryErr := probeViaProxy(r.Context(), client, h.secondaryProbeURL())
+	if ok {
+		h.writeProbeResult(w, id, true, latencyMs, "")
+		return
+	}
+
+	h.writeProbeResult(w, id, false, 0, probeFailureMessage(primaryErr, secondaryErr))
+}
+
+// probeViaProxy runs one GET through the proxy and reports the round-trip
+// latency of that single attempt.
+func probeViaProxy(ctx context.Context, client *http.Client, probeURL string) (ok bool, latencyMs int64, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 	if err != nil {
-		_ = h.Repo.SetProxyPoolStatus(id, "failed", 0)
-		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
-			"success": false,
-			"status":  "failed",
-			"latency": int64(0),
-			"error":   err.Error(),
-		})
-		return
+		return false, 0, err
 	}
 
-	resp, err := client.Do(reqPrimary)
-	latencyMs := time.Since(start).Milliseconds()
-
-	// Primary probe succeeded
-	if err == nil && resp != nil && resp.StatusCode < 400 {
-		_ = resp.Body.Close()
-		_ = h.Repo.SetProxyPoolStatus(id, "passed", latencyMs)
-		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
-			"success": true,
-			"status":  "passed",
-			"latency": latencyMs,
-		})
-		return
-	}
-
+	start := time.Now()
+	resp, err := client.Do(req)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
-
-	// Primary probe failed or timed out. Attempt secondary probe to avoid false negatives when Google is blocked.
-	secStart := time.Now()
-	reqSec, errReqSec := http.NewRequestWithContext(r.Context(), http.MethodGet, secondaryProbeURL, nil)
-	if errReqSec != nil {
-		_ = h.Repo.SetProxyPoolStatus(id, "failed", 0)
-		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
-			"success": false,
-			"status":  "failed",
-			"latency": int64(0),
-			"error":   errReqSec.Error(),
-		})
-		return
+	if err != nil {
+		return false, 0, err
 	}
-
-	respSec, errSec := client.Do(reqSec)
-	if errSec == nil && respSec != nil && respSec.StatusCode < 400 {
-		_ = respSec.Body.Close()
-		latencyMs = time.Since(secStart).Milliseconds()
-		_ = h.Repo.SetProxyPoolStatus(id, "passed", latencyMs)
-		handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
-			"success": true,
-			"status":  "passed",
-			"latency": latencyMs,
-		})
-		return
+	if resp.StatusCode >= 400 {
+		return false, 0, fmt.Errorf("probe returned HTTP %d", resp.StatusCode)
 	}
+	return true, time.Since(start).Milliseconds(), nil
+}
 
-	if respSec != nil && respSec.Body != nil {
-		_ = respSec.Body.Close()
+// probeFailureMessage prefers the fallback error, then the primary one, so a
+// single reachable failure still explains itself.
+func probeFailureMessage(primary, secondary error) string {
+	if secondary != nil {
+		return secondary.Error()
 	}
+	if primary != nil {
+		return primary.Error()
+	}
+	return ""
+}
 
-	// Both probes failed
-	status := "failed"
-	_ = h.Repo.SetProxyPoolStatus(id, status, 0)
-	errStr := "connection timed out or failed"
-	if errSec != nil {
-		errStr = errSec.Error()
-	} else if err != nil {
-		errStr = err.Error()
+// writeProbeResult persists the terminal test state of a pool and mirrors it
+// into the response, so the dashboard can repaint one row without a refetch.
+// A failed pool stores latency 0: an unmeasured value must not be mistaken for
+// a measured fast one.
+func (h *DashboardHandler) writeProbeResult(w http.ResponseWriter, id string, ok bool, latencyMs int64, errStr string) {
+	status := "passed"
+	if !ok {
+		status = "failed"
+		latencyMs = 0
+		if errStr == "" {
+			errStr = "connection timed out or failed"
+		}
 	}
-	handlerutil.WriteJSON(w, http.StatusOK, map[string]any{
-		"success": false,
-		"status":  status,
-		"latency": int64(0),
-		"error":   errStr,
-	})
+	_ = h.Repo.SetProxyPoolStatus(id, status, latencyMs)
+
+	body := map[string]any{"success": ok, "status": status, "latency": latencyMs}
+	if !ok {
+		body["error"] = errStr
+	}
+	handlerutil.WriteJSON(w, http.StatusOK, body)
+}
+
+// primaryProbeURL and secondaryProbeURL fall back to the package defaults so a
+// handler built as a bare struct literal still probes real endpoints.
+func (h *DashboardHandler) primaryProbeURL() string {
+	if h.PrimaryProbeURL == "" {
+		return DefaultPrimaryProbeURL
+	}
+	return h.PrimaryProbeURL
+}
+
+func (h *DashboardHandler) secondaryProbeURL() string {
+	if h.SecondaryProbeURL == "" {
+		return DefaultSecondaryProbeURL
+	}
+	return h.SecondaryProbeURL
 }
 
 // testRelayPool tests a deploy-relay pool (vercel/cloudflare/deno) the way

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -30,9 +31,13 @@ func TestHandleTestProxyPool_FallbackProbe(t *testing.T) {
 	var secondaryHits int32
 	var primaryShouldFail int32
 	var secondaryShouldFail int32
+	var primaryDelayMs int32
 
 	probeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/primary" {
+			if ms := atomic.LoadInt32(&primaryDelayMs); ms > 0 {
+				time.Sleep(time.Duration(ms) * time.Millisecond)
+			}
 			atomic.AddInt32(&primaryHits, 1)
 			if atomic.LoadInt32(&primaryShouldFail) == 1 {
 				http.Error(w, "simulated google failure", http.StatusInternalServerError)
@@ -113,6 +118,7 @@ func TestHandleTestProxyPool_FallbackProbe(t *testing.T) {
 		atomic.StoreInt32(&secondaryHits, 0)
 		atomic.StoreInt32(&primaryShouldFail, 1)
 		atomic.StoreInt32(&secondaryShouldFail, 0)
+		atomic.StoreInt32(&primaryDelayMs, 200)
 
 		poolID := createPool("Fallback Pool", probeServer.URL)
 		testReq := httptest.NewRequest(http.MethodPost, "/api/proxy-pools/"+poolID+"/test", nil)
@@ -134,15 +140,25 @@ func TestHandleTestProxyPool_FallbackProbe(t *testing.T) {
 			t.Fatalf("expected 1 secondary hit, got %d", atomic.LoadInt32(&secondaryHits))
 		}
 		latency, ok := res["latency"].(float64)
-		if !ok || latency < 0 {
-			t.Fatalf("expected latency in response, got %v", res["latency"])
+		if !ok {
+			t.Fatalf("expected numeric latency in response, got %v", res["latency"])
+		}
+		// The primary burned 200ms before failing. The badge has to describe
+		// the probe that decided the outcome, so it must not inherit that wait.
+		if latency >= 200 {
+			t.Fatalf("latency %vms must measure the fallback probe alone, primary was delayed 200ms", latency)
 		}
 
-		// Verify DB status
 		var testStatus, dataStr string
-		err := repo.RawDB().QueryRow("SELECT testStatus, data FROM proxyPools WHERE id = ?", poolID).Scan(&testStatus, &dataStr)
-		if err != nil || testStatus != "passed" {
+		if err := repo.RawDB().QueryRow("SELECT testStatus, data FROM proxyPools WHERE id = ?", poolID).Scan(&testStatus, &dataStr); err != nil || testStatus != "passed" {
 			t.Fatalf("expected testStatus 'passed' in DB, got %s (err: %v)", testStatus, err)
+		}
+		var stored map[string]any
+		if err := json.Unmarshal([]byte(dataStr), &stored); err != nil {
+			t.Fatalf("pool data is not valid JSON: %v", err)
+		}
+		if dbLat, ok := stored["latency"].(float64); !ok || dbLat != latency {
+			t.Fatalf("stored latency %v must match the response latency %v", stored["latency"], latency)
 		}
 	})
 
@@ -152,6 +168,7 @@ func TestHandleTestProxyPool_FallbackProbe(t *testing.T) {
 		atomic.StoreInt32(&secondaryHits, 0)
 		atomic.StoreInt32(&primaryShouldFail, 1)
 		atomic.StoreInt32(&secondaryShouldFail, 1)
+		atomic.StoreInt32(&primaryDelayMs, 0)
 
 		poolID := createPool("Dead Pool", probeServer.URL)
 		testReq := httptest.NewRequest(http.MethodPost, "/api/proxy-pools/"+poolID+"/test", nil)

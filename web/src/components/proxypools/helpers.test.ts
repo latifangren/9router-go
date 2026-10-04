@@ -1,5 +1,18 @@
 import { describe, expect, test } from 'bun:test'
-import { getStatusVariant, getLatencyBadge } from './helpers'
+import type { ProxyPool } from '../../api/client'
+import {
+  filterProxyPools,
+  getLatencyBadge,
+  getStatusVariant,
+  hasMeasuredLatency,
+  isFailedStatus,
+  poolStatusCounts,
+  sortProxyPools
+} from './helpers'
+
+function pool(over: Partial<ProxyPool> = {}): ProxyPool {
+  return { id: 'id', name: 'pool', type: 'http', ...over }
+}
 
 describe('getStatusVariant', () => {
   test('returns success for active and passed', () => {
@@ -50,41 +63,128 @@ describe('getLatencyBadge', () => {
   })
 })
 
-describe('proxy pool filtering & sorting contract', () => {
-  test('failed filter matches failed or error', () => {
-    const isFailed = (p: { testStatus?: string }) =>
-      p.testStatus === 'failed' || p.testStatus === 'error'
-    expect(isFailed({ testStatus: 'failed' })).toBe(true)
-    expect(isFailed({ testStatus: 'error' })).toBe(true)
-    expect(isFailed({ testStatus: 'passed' })).toBe(false)
-    expect(isFailed({ testStatus: 'active' })).toBe(false)
+describe('isFailedStatus', () => {
+  test('matches both the gateway and the upstream failure vocabulary', () => {
+    expect(isFailedStatus(pool({ testStatus: 'failed' }))).toBe(true)
+    expect(isFailedStatus(pool({ testStatus: 'error' }))).toBe(true)
   })
 
-  test('fastest sort assigns Infinity to pools without passed or active status', () => {
-    const sortFastest = (
-      pools: Array<{ name: string; latency?: number; testStatus?: string }>
-    ) => {
-      return [...pools].sort((a, b) => {
-        const aValid = a.testStatus === 'passed' || a.testStatus === 'active'
-        const bValid = b.testStatus === 'passed' || b.testStatus === 'active'
-        const aLat = aValid && typeof a.latency === 'number' && a.latency > 0 ? a.latency : Infinity
-        const bLat = bValid && typeof b.latency === 'number' && b.latency > 0 ? b.latency : Infinity
-        if (aLat !== bLat) return aLat - bLat
-        return (a.name || '').localeCompare(b.name || '')
-      })
-    }
-
-    const pools = [
-      { name: 'dead-low-latency', latency: 10, testStatus: 'failed' },
-      { name: 'error-low-latency', latency: 15, testStatus: 'error' },
-      { name: 'passed-high-latency', latency: 300, testStatus: 'passed' },
-      { name: 'active-med-latency', latency: 120, testStatus: 'active' },
-    ]
-    const sorted = sortFastest(pools)
-    expect(sorted[0].name).toBe('active-med-latency')
-    expect(sorted[1].name).toBe('passed-high-latency')
-    expect(sorted[2].name).toBe('dead-low-latency')
-    expect(sorted[3].name).toBe('error-low-latency')
+  test('does not match healthy or untested pools', () => {
+    expect(isFailedStatus(pool({ testStatus: 'passed' }))).toBe(false)
+    expect(isFailedStatus(pool({ testStatus: 'active' }))).toBe(false)
+    expect(isFailedStatus(pool({ testStatus: 'unknown' }))).toBe(false)
+    expect(isFailedStatus(pool())).toBe(false)
   })
 })
 
+describe('hasMeasuredLatency', () => {
+  test('requires a status that means the proxy answered', () => {
+    expect(hasMeasuredLatency(pool({ testStatus: 'passed' }))).toBe(true)
+    expect(hasMeasuredLatency(pool({ testStatus: 'active' }))).toBe(true)
+  })
+
+  test('a failed or untested pool has no measurement worth ranking', () => {
+    expect(hasMeasuredLatency(pool({ testStatus: 'failed' }))).toBe(false)
+    expect(hasMeasuredLatency(pool({ testStatus: 'error' }))).toBe(false)
+    expect(hasMeasuredLatency(pool({ testStatus: 'unknown' }))).toBe(false)
+  })
+})
+
+describe('filterProxyPools', () => {
+  const pools = [
+    pool({ id: '1', name: 'active-passed', isActive: true, testStatus: 'passed' }),
+    pool({ id: '2', name: 'inactive-passed', isActive: false, testStatus: 'passed' }),
+    pool({ id: '3', name: 'active-failed', isActive: true, testStatus: 'failed' }),
+    pool({ id: '4', name: 'inactive-error', isActive: false, testStatus: 'error' }),
+    pool({ id: '5', name: 'active-unknown', isActive: true, testStatus: 'unknown' })
+  ]
+
+  test('all returns every pool unchanged', () => {
+    expect(filterProxyPools(pools, 'all')).toHaveLength(5)
+  })
+
+  test('active filters on isActive, not on test status', () => {
+    expect(filterProxyPools(pools, 'active').map((p) => p.id)).toEqual(['1', '3', '5'])
+  })
+
+  test('passed filters on the last successful probe', () => {
+    expect(filterProxyPools(pools, 'passed').map((p) => p.id)).toEqual(['1', '2'])
+  })
+
+  test('failed covers failed and error in one bucket', () => {
+    expect(filterProxyPools(pools, 'failed').map((p) => p.id)).toEqual(['3', '4'])
+  })
+})
+
+describe('sortProxyPools', () => {
+  test('default leaves the existing order untouched', () => {
+    const pools = [pool({ id: '1', name: 'b' }), pool({ id: '2', name: 'a' })]
+    expect(sortProxyPools(pools, 'default').map((p) => p.id)).toEqual(['1', '2'])
+  })
+
+  test('fastest ranks measured pools by latency and pushes the rest to the end', () => {
+    const pools = [
+      pool({ id: '1', name: 'dead-low-latency', latency: 10, testStatus: 'failed' }),
+      pool({ id: '2', name: 'error-low-latency', latency: 15, testStatus: 'error' }),
+      pool({ id: '3', name: 'passed-high-latency', latency: 300, testStatus: 'passed' }),
+      pool({ id: '4', name: 'active-med-latency', latency: 120, testStatus: 'active' }),
+      pool({ id: '5', name: 'untested', testStatus: 'unknown' })
+    ]
+    expect(sortProxyPools(pools, 'fastest').map((p) => p.id)).toEqual(['4', '3', '1', '2', '5'])
+  })
+
+  test('fastest does not produce NaN ordering when every latency is unranked', () => {
+    const pools = [
+      pool({ id: '1', name: 'zeta', testStatus: 'failed' }),
+      pool({ id: '2', name: 'alpha', testStatus: 'unknown' }),
+      pool({ id: '3', name: 'mid', testStatus: 'error' })
+    ]
+    expect(sortProxyPools(pools, 'fastest').map((p) => p.name)).toEqual(['alpha', 'mid', 'zeta'])
+  })
+
+  test('fastest breaks equal latencies by name so the order is stable', () => {
+    const pools = [
+      pool({ id: '1', name: 'b', latency: 120, testStatus: 'passed' }),
+      pool({ id: '2', name: 'a', latency: 120, testStatus: 'passed' })
+    ]
+    expect(sortProxyPools(pools, 'fastest').map((p) => p.name)).toEqual(['a', 'b'])
+  })
+
+  test('recently tested orders newest first and treats unparseable stamps as oldest', () => {
+    const pools = [
+      pool({ id: '1', name: 'old', lastTestedAt: '2026-01-01T00:00:00Z' }),
+      pool({ id: '2', name: 'never', lastTestedAt: null }),
+      pool({ id: '3', name: 'new', lastTestedAt: '2026-10-01T00:00:00Z' }),
+      pool({ id: '4', name: 'garbage', lastTestedAt: 'not-a-date' })
+    ]
+    expect(sortProxyPools(pools, 'recently_tested').map((p) => p.id)).toEqual(['3', '1', '4', '2'])
+  })
+
+  test('name sorts alphabetically', () => {
+    const pools = [pool({ id: '1', name: 'charlie' }), pool({ id: '2', name: 'alpha' })]
+    expect(sortProxyPools(pools, 'name').map((p) => p.name)).toEqual(['alpha', 'charlie'])
+  })
+
+  test('never mutates the input array', () => {
+    const pools = [pool({ id: '1', name: 'b' }), pool({ id: '2', name: 'a' })]
+    const before = pools.map((p) => p.id)
+    sortProxyPools(pools, 'name')
+    expect(pools.map((p) => p.id)).toEqual(before)
+  })
+})
+
+describe('poolStatusCounts', () => {
+  test('counts each bucket independently of the active flag', () => {
+    const pools = [
+      pool({ id: '1', isActive: true, testStatus: 'passed' }),
+      pool({ id: '2', isActive: false, testStatus: 'passed' }),
+      pool({ id: '3', isActive: true, testStatus: 'failed' }),
+      pool({ id: '4', isActive: false, testStatus: 'error' })
+    ]
+    expect(poolStatusCounts(pools)).toEqual({ active: 2, passed: 2, failed: 2 })
+  })
+
+  test('an empty list counts zero everywhere', () => {
+    expect(poolStatusCounts([])).toEqual({ active: 0, passed: 0, failed: 0 })
+  })
+})
