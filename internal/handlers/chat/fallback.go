@@ -661,7 +661,8 @@ func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) ([]byte, 
 	out := body
 	var origTokens, savedTokens, savedPct int
 	if h.TokenSaver.RTKEnabled() {
-		if next, did := tokensaver.CompressMessages(out); did {
+		rtkCfg := h.TokenSaver.RTKConfig()
+		if next, did := tokensaver.CompressMessagesWithConfig(out, rtkCfg); did {
 			origTokens = len(out) / 4
 			compressedTokens := len(next) / 4
 			savedTokens = origTokens - compressedTokens
@@ -678,14 +679,25 @@ func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) ([]byte, 
 			out = next
 		}
 	}
+	if h.TokenSaver.CavemanInputMode() {
+		if next, did := tokensaver.CompressInputMessages(out, h.TokenSaver.CavemanPreserveKeywords()); did {
+			out = next
+		}
+	}
 	inject := tokensaver.InjectSystemPrompt
 	if claudeNative {
 		inject = tokensaver.InjectSystemPromptClaude
 	}
 	if h.TokenSaver.CavemanEnabled() {
-		prompt := tokensaver.GetCavemanPrompt(h.TokenSaver.CavemanLevel())
-		if next, did := inject(out, prompt); did {
-			out = next
+		bypass := false
+		if h.TokenSaver.CavemanAutoClarity() && tokensaver.ShouldBypassCaveman(out) {
+			bypass = true
+		}
+		if !bypass {
+			prompt := tokensaver.GetCavemanPromptWithLang(h.TokenSaver.CavemanLevel(), h.TokenSaver.CavemanLanguage())
+			if next, did := inject(out, prompt); did {
+				out = next
+			}
 		}
 	}
 	if h.TokenSaver.PonytailEnabled() {

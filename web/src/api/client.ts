@@ -59,8 +59,21 @@ export interface Settings {
   requireApiKey?: boolean
   tunnelDashboardAccess?: boolean
   rtkEnabled?: boolean
+  rtkMode?: 'simple' | 'advance' | string
+  rtkIntensity?: 'minimal' | 'standard' | 'aggressive' | string
+  rtkMaxLines?: number
+  rtkMaxChars?: number
+  rtkDeduplicate?: boolean
+  rtkCategories?: Record<string, boolean>
+  rtkFilters?: Record<string, boolean>
+  rtkRawRetention?: 'never' | 'failures' | 'always' | string
   cavemanEnabled?: boolean
+  cavemanMode?: 'simple' | 'advance' | string
   cavemanLevel?: string
+  cavemanAutoClarity?: boolean
+  cavemanLanguage?: string
+  cavemanInputMode?: boolean
+  cavemanPreserveKeywords?: string
   ponytailEnabled?: boolean
   ponytailLevel?: string
   adhdEnabled?: boolean
@@ -753,6 +766,40 @@ export const api = {
     request<Record<string, unknown>>('/api/settings', {
       method: 'PATCH',
       body: JSON.stringify(settings),
+    }),
+  testRtk: (data: { text: string; config?: Record<string, unknown> }) =>
+    request<{
+      originalTokens: number
+      compressedTokens: number
+      savedTokens: number
+      savedPct: number
+      text: string
+      detectedCategory: string
+      techniquesUsed: string[]
+    }>('/api/tokensaver/rtk/test', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getRTKFilters: () =>
+    request<{
+      filters: Array<{
+        id: string
+        label: string
+        category: string
+        description: string
+        priority: number
+        enabled: boolean
+      }>
+    }>('/api/tokensaver/rtk/filters'),
+  testCaveman: (data: { text: string; level?: string; language?: string; mode?: string; preserveKeywords?: string }) =>
+    request<{
+      text: string
+      originalTokens: number
+      compressedTokens: number
+      savedPct: number
+    }>('/api/tokensaver/caveman/test', {
+      method: 'POST',
+      body: JSON.stringify(data),
     }),
   /**
    * Per-provider outbound header overrides. `builtinHeaders` is what the

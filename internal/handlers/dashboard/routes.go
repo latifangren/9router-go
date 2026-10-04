@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"9router/proxy/internal/db"
+	"9router/proxy/internal/handlers/shared"
 )
 
 // Default probe URLs for proxy pool health checks.
@@ -19,15 +20,20 @@ type DashboardHandler struct {
 	Repo              *db.Repo
 	PrimaryProbeURL   string
 	SecondaryProbeURL string
+	TokenSaver        *shared.TokenSaverConfig
 }
 
 // NewDashboardHandler initializes a DashboardHandler with the provided Repo.
-func NewDashboardHandler(repo *db.Repo) *DashboardHandler {
-	return &DashboardHandler{
+func NewDashboardHandler(repo *db.Repo, ts ...*shared.TokenSaverConfig) *DashboardHandler {
+	h := &DashboardHandler{
 		Repo:              repo,
 		PrimaryProbeURL:   DefaultPrimaryProbeURL,
 		SecondaryProbeURL: DefaultSecondaryProbeURL,
 	}
+	if len(ts) > 0 && ts[0] != nil {
+		h.TokenSaver = ts[0]
+	}
+	return h
 }
 
 // getURLParam retrieves a route parameter from Chi URLParam or standard PathValue.
@@ -97,6 +103,10 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Get("/settings/database", h.HandleExportDatabase)
 		r.Post("/settings/database", h.HandleImportDatabase)
 		r.Post("/settings/proxy-test", h.HandleProxyTest)
+
+		// Token Saver Testing Benches
+		r.Post("/tokensaver/rtk/test", h.HandleTestRTK)
+		r.Post("/tokensaver/caveman/test", h.HandleTestCaveman)
 
 		// Tunnel & Tailscale
 		r.Get("/tunnel/status", h.HandleTunnelStatus)

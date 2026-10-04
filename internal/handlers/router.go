@@ -145,7 +145,11 @@ func SetupRoutes(r interface {
 // browser session, a valid API key or the local CLI token through when login is
 // enabled (upstream dashboardGuard).
 func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) {
-	dashH := dashboard.NewDashboardHandler(repo)
+	var ts *TokenSaverConfig
+	if chatH != nil {
+		ts = chatH.TokenSaver
+	}
+	dashH := dashboard.NewDashboardHandler(repo, ts)
 	ssoH := sso.NewHandler(repo)
 
 	r.Get("/api/connections", dashH.HandleGetConnections)
@@ -237,6 +241,11 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	r.Get("/api/settings/database", dashH.HandleExportDatabase)
 	r.Post("/api/settings/database", dashH.HandleImportDatabase)
 	r.Post("/api/settings/proxy-test", dashH.HandleProxyTest)
+
+	// Token saver testing benches & filter catalog
+	r.Get("/api/tokensaver/rtk/filters", dashH.HandleGetRTKFilters)
+	r.Post("/api/tokensaver/rtk/test", dashH.HandleTestRTK)
+	r.Post("/api/tokensaver/caveman/test", dashH.HandleTestCaveman)
 
 	// Headroom token-compression proxy management (dashboard parity)
 	headroomH := media.NewHeadroomHandler(repo)
