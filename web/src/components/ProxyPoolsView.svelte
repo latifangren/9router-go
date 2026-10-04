@@ -118,13 +118,15 @@
 
   let activeCount = $derived(proxyPools.filter((p) => p.isActive === true).length)
   let passedCount = $derived(proxyPools.filter((p) => p.testStatus === 'passed').length)
-  let failedCount = $derived(proxyPools.filter((p) => p.testStatus === 'failed').length)
+  let failedCount = $derived(
+    proxyPools.filter((p) => p.testStatus === 'failed' || p.testStatus === 'error').length
+  )
 
   let filteredPools = $derived(
     proxyPools.filter((p) => {
       if (statusFilter === 'active') return p.isActive === true
       if (statusFilter === 'passed') return p.testStatus === 'passed'
-      if (statusFilter === 'failed') return p.testStatus === 'failed'
+      if (statusFilter === 'failed') return p.testStatus === 'failed' || p.testStatus === 'error'
       return true
     })
   )
@@ -132,8 +134,10 @@
   let displayedPools = $derived.by(() => {
     if (sortOption === 'fastest') {
       return [...filteredPools].sort((a, b) => {
-        const aLat = typeof a.latency === 'number' && a.latency > 0 ? a.latency : Infinity
-        const bLat = typeof b.latency === 'number' && b.latency > 0 ? b.latency : Infinity
+        const aValid = a.testStatus === 'passed' || a.testStatus === 'active'
+        const bValid = b.testStatus === 'passed' || b.testStatus === 'active'
+        const aLat = aValid && typeof a.latency === 'number' && a.latency > 0 ? a.latency : Infinity
+        const bLat = bValid && typeof b.latency === 'number' && b.latency > 0 ? b.latency : Infinity
         if (aLat !== bLat) return aLat - bLat
         return (a.name || '').localeCompare(b.name || '')
       })
@@ -440,6 +444,7 @@
               ? {
                   ...p,
                   testStatus: 'failed',
+                  latency: 0,
                   lastTestedAt: new Date().toISOString(),
                 }
               : p
@@ -486,7 +491,9 @@
   }
 
   async function handleDisableFailed() {
-    const failed = proxyPools.filter((p) => p.testStatus === 'failed' && p.isActive !== false)
+    const failed = proxyPools.filter(
+      (p) => (p.testStatus === 'failed' || p.testStatus === 'error') && p.isActive !== false
+    )
     if (failed.length === 0) {
       notifications.info('No active failed proxies found')
       return
@@ -508,7 +515,7 @@
   }
 
   function handleDeleteFailed() {
-    const failed = proxyPools.filter((p) => p.testStatus === 'failed')
+    const failed = proxyPools.filter((p) => p.testStatus === 'failed' || p.testStatus === 'error')
     if (failed.length === 0) {
       notifications.info('No failed proxies to delete')
       return
@@ -957,6 +964,10 @@
       {:else}
         <div class="flex flex-col divide-y divide-black/[0.04] dark:divide-white/[0.05]">
           {#each displayedPools as pool (pool.id)}
+            {@const latencyBadge =
+              pool.testStatus === 'passed' || pool.testStatus === 'active'
+                ? getLatencyBadge(pool.latency)
+                : null}
             <div class="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div class="flex items-start gap-3 min-w-0 flex-1">
                 <input
@@ -973,10 +984,9 @@
                     <Badge variant={getStatusVariant(pool.testStatus)} size="sm" dot>
                       {pool.testStatus || 'unknown'}
                     </Badge>
-                    {#if getLatencyBadge(pool.latency)}
-                      {@const latencyBadge = getLatencyBadge(pool.latency)}
-                      <Badge variant={latencyBadge?.variant} size="sm">
-                        {latencyBadge?.text}
+                    {#if latencyBadge}
+                      <Badge variant={latencyBadge.variant} size="sm">
+                        {latencyBadge.text}
                       </Badge>
                     {/if}
                     <Badge variant={pool.isActive ? 'success' : 'default'} size="sm">
