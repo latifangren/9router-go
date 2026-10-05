@@ -3,7 +3,7 @@ package chat
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	json "9router/proxy/internal/fastjson"
 	"errors"
 	"fmt"
 	"io"

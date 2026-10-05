@@ -8,7 +8,7 @@ import (
 	"9router/proxy/internal/updater"
 	"bytes"
 	"context"
-	json "encoding/json/v2"
+	json "9router/proxy/internal/fastjson"
 	"errors"
 	"fmt"
 	"io"
