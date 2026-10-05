@@ -198,13 +198,46 @@
       <div class="flex-1 overflow-y-auto p-6 space-y-4 font-body text-xs">
         <!-- Token Saver (RTK) Card -->
         {#if selectedDetail.tokens?.saved_tokens && selectedDetail.tokens.saved_tokens > 0}
-          <div class="p-3.5 rounded-xl bg-success/10 border border-success/25 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-            <div class="flex items-center gap-2">
-              <Zap class="w-4 h-4 text-success shrink-0" />
-              <Badge variant="success" size="sm" class="font-semibold">Token Saver (RTK)</Badge>
+          {@const origEst = selectedDetail.tokens.original_input_tokens ?? ((selectedDetail.tokens.prompt_tokens || 0) + (selectedDetail.tokens.saved_tokens || 0))}
+          {@const savedTokens = selectedDetail.tokens.saved_tokens || 0}
+          {@const compEst = selectedDetail.tokens.compressed_input_tokens ?? Math.max(0, origEst - savedTokens)}
+          {@const savedPct = selectedDetail.tokens.saved_percent ?? (origEst > 0 ? Math.round((savedTokens / origEst) * 100) : 0)}
+          <div class="p-4 rounded-xl bg-gradient-to-r from-success/15 via-success/10 to-surface-2 border border-success/30 space-y-2.5">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <div class="flex items-center gap-2">
+                <div class="w-6 h-6 rounded-lg bg-success/20 flex items-center justify-center text-success">
+                  <Zap class="w-3.5 h-3.5" />
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <span class="font-headline font-bold text-xs text-text-main">Token Saver Optimization</span>
+                  <Badge variant="success" size="sm" class="font-semibold px-2">
+                    -{fmt(savedTokens)} tokens ({savedPct}% saved)
+                  </Badge>
+                </div>
+              </div>
+              <div class="font-code text-[11px] text-text-muted bg-surface/60 px-2.5 py-1 rounded-lg border border-border/50">
+                Est: <span class="text-text-main font-medium">{fmt(origEst)}</span> → <span class="font-bold text-success">{fmt(compEst)}</span>
+              </div>
             </div>
-            <div class="font-code text-xs text-text-main">
-              Compressed: <span class="text-text-muted">{fmt(selectedDetail.tokens.original_input_tokens ?? ((selectedDetail.tokens.prompt_tokens || 0) + (selectedDetail.tokens.saved_tokens || 0)))}</span> → <span class="font-bold text-success">{fmt(selectedDetail.tokens.prompt_tokens)}</span> <span class="text-success font-medium">({selectedDetail.tokens.saved_percent ?? 0}% saved)</span>
+
+            <!-- Detailed breakdown pills -->
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1 border-t border-success/15 font-code text-[11px]">
+              <div class="bg-surface/50 p-2 rounded-lg border border-border/40">
+                <span class="text-text-muted text-[10px] block font-sans">Pre-Compression (Est)</span>
+                <span class="text-text-main font-bold">{fmt(origEst)} tokens</span>
+              </div>
+              <div class="bg-surface/50 p-2 rounded-lg border border-border/40">
+                <span class="text-text-muted text-[10px] block font-sans">Post-RTK (Est)</span>
+                <span class="text-success font-bold">{fmt(compEst)} tokens</span>
+                <span class="text-[10px] text-success/80 block font-sans">-{fmt(savedTokens)} pruned</span>
+              </div>
+              <div class="bg-surface/50 p-2 rounded-lg border border-border/40 col-span-2 sm:col-span-1">
+                <span class="text-text-muted text-[10px] block font-sans">Billed Input (Upstream)</span>
+                <span class="text-brand-500 font-bold">{fmt(selectedDetail.tokens.prompt_tokens)} tokens</span>
+                {#if cachedTokensFor(selectedDetail) > 0}
+                  <span class="text-[10px] text-info block font-sans">{fmt(cachedTokensFor(selectedDetail))} cached</span>
+                {/if}
+              </div>
             </div>
           </div>
         {/if}
@@ -214,17 +247,17 @@
           <div class="p-3 rounded-lg bg-surface-2 border border-border">
             <div class="text-text-muted text-[10px] uppercase font-bold">Latency</div>
             <div class="font-code text-sm font-bold text-text-main mt-1">
-              {selectedDetail.latency?.total || 0}ms
+              {selectedDetail.latency?.total ? `${selectedDetail.latency.total}ms` : '—'}
             </div>
           </div>
           <div class="p-3 rounded-lg bg-surface-2 border border-border">
             <div class="text-text-muted text-[10px] uppercase font-bold">TTFT</div>
             <div class="font-code text-sm font-bold text-text-main mt-1">
-              {selectedDetail.latency?.ttft || 0}ms
+              {selectedDetail.latency?.ttft && selectedDetail.latency.ttft > 0 ? `${selectedDetail.latency.ttft}ms` : '— (non-stream)'}
             </div>
           </div>
           <div class="p-3 rounded-lg bg-surface-2 border border-border">
-            <div class="text-text-muted text-[10px] uppercase font-bold">Total Input</div>
+            <div class="text-text-muted text-[10px] uppercase font-bold">Billed Input</div>
             <div class="font-code text-sm font-bold text-brand-500 mt-1">
               {fmt(selectedDetail.tokens?.prompt_tokens)}
             </div>

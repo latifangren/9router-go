@@ -47,6 +47,7 @@ func (h *ChatHandler) LogFailure(
 	}
 	if info.SavedTokens > 0 {
 		tokens["original_input_tokens"] = info.OriginalInputTokens
+		tokens["compressed_input_tokens"] = info.OriginalInputTokens - info.SavedTokens
 		tokens["saved_tokens"] = info.SavedTokens
 		tokens["saved_percent"] = info.SavedPercent
 	}
@@ -197,6 +198,7 @@ func (h *ChatHandler) logUsage(info *UsageLogInfo, usage *translator.OpenAIUsage
 	}
 	if info.SavedTokens > 0 {
 		tokensMap["original_input_tokens"] = info.OriginalInputTokens
+		tokensMap["compressed_input_tokens"] = info.OriginalInputTokens - info.SavedTokens
 		tokensMap["saved_tokens"] = info.SavedTokens
 		tokensMap["saved_percent"] = info.SavedPercent
 	}

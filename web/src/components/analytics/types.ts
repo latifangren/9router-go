@@ -55,6 +55,7 @@ export interface RequestDetailItem {
     cache_read_input_tokens?: number
     reasoning_tokens?: number
     original_input_tokens?: number
+    compressed_input_tokens?: number
     saved_tokens?: number
     saved_percent?: number
   }
