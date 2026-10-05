@@ -1,6 +1,13 @@
 package chat
 
 import (
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	json "encoding/json/v2"
+
 	"9router/proxy/internal/constants"
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlers/shared"
@@ -9,10 +16,7 @@ import (
 	"9router/proxy/internal/proxy"
 	"9router/proxy/internal/proxy/executor"
 	"9router/proxy/internal/proxy/oauth"
-	json "encoding/json/v2"
-	"fmt"
-	"net/http"
-	"strings"
+	"9router/proxy/internal/semanticcache"
 )
 
 // NewChatHandler creates a ChatHandler with the given repository and a streaming-capable HTTP client.
@@ -44,7 +48,13 @@ func NewChatHandler(repo *db.Repo, ts ...*shared.TokenSaverConfig) *ChatHandler 
 			Transport: transport,
 			Timeout:   0, // no timeout for streaming support
 		},
-		TokenSaver:  cfg,
+		TokenSaver: cfg,
+		SemanticCache: semanticcache.New(semanticcache.Config{
+			Enabled:             true,
+			SimilarityThreshold: 0.95,
+			TTL:                 24 * time.Hour,
+			MaxEntries:          1000,
+		}, nil, nil),
 		stickyState: make(map[string]*comboStickyState),
 	}
 }

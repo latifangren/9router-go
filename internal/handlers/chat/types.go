@@ -10,6 +10,7 @@ import (
 	"9router/proxy/internal/handlers/shared"
 	"9router/proxy/internal/models"
 	"9router/proxy/internal/proxy"
+	"9router/proxy/internal/semanticcache"
 )
 
 type comboStickyState struct {
@@ -23,12 +24,13 @@ type comboStickyState struct {
 
 // ChatHandler handles /v1/chat/completions (OpenAI) and /v1/messages (Claude) endpoints.
 type ChatHandler struct {
-	Repo        *db.Repo
-	Client      *http.Client
-	TokenSaver  *shared.TokenSaverConfig
-	stickyMu            sync.Mutex
-	stickyState         map[string]*comboStickyState
-	oauthRefreshFlight  singleflight.Group
+	Repo               *db.Repo
+	Client             *http.Client
+	TokenSaver         *shared.TokenSaverConfig
+	SemanticCache      *semanticcache.Cache
+	stickyMu           sync.Mutex
+	stickyState        map[string]*comboStickyState
+	oauthRefreshFlight singleflight.Group
 }
 
 // Type aliases for shared types

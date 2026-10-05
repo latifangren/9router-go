@@ -4,6 +4,7 @@ import (
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/providers"
+	"9router/proxy/internal/semanticcache"
 	"9router/proxy/internal/translator"
 	"9router/proxy/internal/updater"
 	"bytes"
@@ -49,14 +50,32 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	ctx := handlerutil.WithSessionID(r.Context(), handlerutil.ExtractSessionID(r))
+	ctx = handlerutil.WithClientAnthropicBeta(ctx, r.Header.Get("anthropic-beta"))
+
+	// Check semantic cache for non-streaming requests before model resolution
+	if !reqBody.Stream && h.SemanticCache != nil && h.SemanticCache.Enabled() {
+		var openAIReq translator.OpenAIRequest
+		if err := json.Unmarshal(body, &openAIReq); err == nil {
+			if entry, score, hit := h.SemanticCache.Lookup(ctx, &openAIReq); hit {
+				w.Header().Set("Content-Type", entry.ContentType)
+				w.Header().Set("X-Cache", "HIT")
+				w.Header().Set("X-Semantic-Similarity", fmt.Sprintf("%.4f", score))
+				w.WriteHeader(http.StatusOK)
+				w.Write(entry.ResponseBody)
+				log.Info("chat", "semantic cache hit", "model", reqBody.Model, "similarity", fmt.Sprintf("%.4f", score))
+				return
+			}
+			ctx = semanticcache.WithCachedRequest(ctx, &openAIReq)
+		}
+	}
+
 	modelInfo, err := h.resolveModel(reqBody.Model)
 	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	ctx := handlerutil.WithSessionID(r.Context(), handlerutil.ExtractSessionID(r))
-	ctx = handlerutil.WithClientAnthropicBeta(ctx, r.Header.Get("anthropic-beta"))
 	requiredCaps := DetectRequiredCapabilities(body)
 
 	if len(modelInfo.ComboModels) > 0 {

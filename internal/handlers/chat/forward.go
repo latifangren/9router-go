@@ -17,6 +17,7 @@ import (
 	"9router/proxy/internal/providers"
 	internalproxy "9router/proxy/internal/proxy"
 	"9router/proxy/internal/proxy/executor"
+	"9router/proxy/internal/semanticcache"
 	"9router/proxy/internal/shutdown"
 	"9router/proxy/internal/translator"
 )
@@ -406,6 +407,11 @@ func (h *ChatHandler) handleJSONResponse(ctx context.Context, w http.ResponseWri
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write(body)
+		if h.SemanticCache != nil && h.SemanticCache.Enabled() {
+			if cachedReq := semanticcache.FromContext(ctx); cachedReq != nil {
+				_ = h.SemanticCache.Store(ctx, cachedReq, body, "application/json")
+			}
+		}
 		return nil
 	}
 
@@ -426,6 +432,11 @@ func (h *ChatHandler) handleJSONResponse(ctx context.Context, w http.ResponseWri
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(translated)
+	if h.SemanticCache != nil && h.SemanticCache.Enabled() {
+		if cachedReq := semanticcache.FromContext(ctx); cachedReq != nil {
+			_ = h.SemanticCache.Store(ctx, cachedReq, translated, "application/json")
+		}
+	}
 	return nil
 }
 
