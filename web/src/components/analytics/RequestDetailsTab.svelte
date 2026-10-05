@@ -231,57 +231,58 @@ let {
           </div>
         </div>
 
-        {@const promptTokens = selectedDetail.tokens?.prompt_tokens ?? 0}
-        {@const cacheRead = cachedTokensFor(selectedDetail)}
-        {@const savedTokens = selectedDetail.tokens?.saved_tokens ?? 0}
-        {@const fromTokens = savedTokens > 0 ? (promptTokens + savedTokens) : promptTokens}
-        {@const savedPct = fromTokens > 0 ? Math.round((savedTokens / fromTokens) * 100) : 0}
+        {#if selectedDetail.tokens}
+          {@const promptTokens = selectedDetail.tokens.prompt_tokens ?? 0}
+          {@const cacheRead = cachedTokensFor(selectedDetail)}
+          {@const savedTokens = selectedDetail.tokens.saved_tokens ?? 0}
+          {@const fromTokens = savedTokens > 0 ? (promptTokens + savedTokens) : promptTokens}
+          {@const savedPct = fromTokens > 0 ? Math.round((savedTokens / fromTokens) * 100) : 0}
+          {@const compTokens = selectedDetail.tokens.completion_tokens ?? 0}
+          {@const reasoningTokens = selectedDetail.tokens.reasoning_tokens ?? 0}
 
-        <!-- Token Group: Input (OmniRoute style) -->
-        <div class="p-3.5 rounded-xl bg-surface-2/60 border border-border space-y-1.5">
-          <div class="text-[10px] text-text-muted uppercase font-bold tracking-wider">
-            Input
-          </div>
-          <div class="flex flex-wrap items-center gap-1.5 font-code">
-            <span class="px-2 py-0.5 rounded bg-brand-500/20 text-brand-500 text-xs font-bold">
-              Total In: {fmt(promptTokens)}
-            </span>
-            <span class="px-2 py-0.5 rounded bg-sky-500/20 text-sky-700 dark:text-sky-400 text-xs font-bold">
-              Cache Read: {cacheRead > 0 ? fmt(cacheRead) : '0'}
-              {#if promptTokens > 0 && cacheRead > 0}
-                <span class="font-normal opacity-85 font-sans text-[11px]">({Math.min(100, Math.round((cacheRead / promptTokens) * 100))}%)</span>
+          <!-- Token Group: Input (OmniRoute style) -->
+          <div class="p-3.5 rounded-xl bg-surface-2/60 border border-border space-y-1.5">
+            <div class="text-[10px] text-text-muted uppercase font-bold tracking-wider">
+              Input
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5 font-code">
+              <span class="px-2 py-0.5 rounded bg-brand-500/20 text-brand-500 text-xs font-bold">
+                Total In: {fmt(promptTokens)}
+              </span>
+              <span class="px-2 py-0.5 rounded bg-sky-500/20 text-sky-700 dark:text-sky-400 text-xs font-bold">
+                Cache Read: {cacheRead > 0 ? fmt(cacheRead) : '0'}
+                {#if promptTokens > 0 && cacheRead > 0}
+                  <span class="font-normal opacity-85 font-sans text-[11px]">({Math.min(100, Math.round((cacheRead / promptTokens) * 100))}%)</span>
+                {/if}
+              </span>
+              <span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-400 text-xs font-bold">
+                Cache Write: {selectedDetail.tokens.cache_creation_input_tokens ? fmt(selectedDetail.tokens.cache_creation_input_tokens) : 'N/A'}
+              </span>
+              {#if savedTokens > 0}
+                <span class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-700 dark:text-purple-300 text-xs font-bold">
+                  Compressed: {fmt(fromTokens)} → {fmt(promptTokens)} ({savedPct}% saved)
+                </span>
               {/if}
-            </span>
-            <span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-400 text-xs font-bold">
-              Cache Write: {selectedDetail.tokens?.cache_creation_input_tokens ? fmt(selectedDetail.tokens.cache_creation_input_tokens) : 'N/A'}
-            </span>
-            {#if savedTokens > 0}
-              <span class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-700 dark:text-purple-300 text-xs font-bold">
-                Compressed: {fmt(fromTokens)} → {fmt(promptTokens)} ({savedPct}% saved)
-              </span>
-            {/if}
+            </div>
           </div>
-        </div>
 
-        {@const compTokens = selectedDetail.tokens?.completion_tokens ?? 0}
-        {@const reasoningTokens = selectedDetail.tokens?.reasoning_tokens ?? 0}
-
-        <!-- Token Group: Output (OmniRoute style) -->
-        <div class="p-3.5 rounded-xl bg-surface-2/60 border border-border space-y-1.5">
-          <div class="text-[10px] text-text-muted uppercase font-bold tracking-wider">
-            Output
-          </div>
-          <div class="flex flex-wrap items-center gap-1.5 font-code">
-            <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-xs font-bold">
-              Total Out: {fmt(compTokens)}
-            </span>
-            {#if reasoningTokens > 0}
-              <span class="px-2 py-0.5 rounded bg-violet-500/20 text-violet-700 dark:text-violet-400 text-xs font-bold">
-                Reasoning: {fmt(reasoningTokens)}
+          <!-- Token Group: Output (OmniRoute style) -->
+          <div class="p-3.5 rounded-xl bg-surface-2/60 border border-border space-y-1.5">
+            <div class="text-[10px] text-text-muted uppercase font-bold tracking-wider">
+              Output
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5 font-code">
+              <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-xs font-bold">
+                Total Out: {fmt(compTokens)}
               </span>
-            {/if}
+              {#if reasoningTokens > 0}
+                <span class="px-2 py-0.5 rounded bg-violet-500/20 text-violet-700 dark:text-violet-400 text-xs font-bold">
+                  Reasoning: {fmt(reasoningTokens)}
+                </span>
+              {/if}
+            </div>
           </div>
-        </div>
+        {/if}
 
         <!-- Request Metadata -->
         <div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1">
