@@ -135,6 +135,9 @@
   let ponytailLevel = $state('full')
   let adhdEnabled = $state(false)
   let adhdLevel = $state('full')
+  let semanticCacheEnabled = $state(false)
+  let semanticCacheTTL = $state('1440')
+  let semanticCacheMaxEntries = $state('1000')
   let locale = $state('en')
 
   // Collapsible Card States (Compact by default)
@@ -258,6 +261,9 @@
       if (typeof settings.ponytailLevel === 'string' && settings.ponytailLevel) ponytailLevel = settings.ponytailLevel
       if (typeof settings.adhdEnabled === 'boolean') adhdEnabled = settings.adhdEnabled
       if (typeof settings.adhdLevel === 'string' && settings.adhdLevel) adhdLevel = settings.adhdLevel
+      if (typeof settings.semanticCacheEnabled === 'boolean') semanticCacheEnabled = settings.semanticCacheEnabled
+      if (typeof settings.semanticCacheTTL === 'number' && settings.semanticCacheTTL > 0) semanticCacheTTL = String(settings.semanticCacheTTL)
+      if (typeof settings.semanticCacheMaxEntries === 'number' && settings.semanticCacheMaxEntries > 0) semanticCacheMaxEntries = String(settings.semanticCacheMaxEntries)
     }
   })
 
@@ -1850,6 +1856,62 @@ f6e5d4c3b2a1   redis:7-alpine "docker-entrypoint.s…"   2 hours ago     Up 2 ho
         <p class="text-xs text-primary">
           {ADHD_LEVELS.find((lvl) => lvl.id === adhdLevel)?.desc || ''}
         </p>
+      </div>
+    {/if}
+
+    <!-- 6. Prompt & Response Cache -->
+    <div class="flex items-center justify-between pt-4 mt-4 border-t border-border gap-4 flex-wrap">
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2 flex-wrap">
+          <p class="font-medium">
+            Prompt / Response Cache
+          </p>
+          <span class="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary font-medium">
+            100% token savings
+          </span>
+        </div>
+        <p class="text-xs text-text-muted mt-1">
+          Exact-match prompt & response cache. Skips upstream calls completely on cache hit, eliminating 100% latency and tokens.
+        </p>
+      </div>
+
+      <div class="flex items-center gap-2 shrink-0">
+        <Toggle
+          checked={semanticCacheEnabled}
+          onChange={() => {
+            semanticCacheEnabled = !semanticCacheEnabled
+            patchSetting({ semanticCacheEnabled })
+          }}
+        />
+      </div>
+    </div>
+
+    {#if semanticCacheEnabled}
+      <div class="mt-3 p-3 rounded-lg bg-surface-2 border border-border/50 space-y-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+          <div>
+            <label for="cache-ttl" class="text-text-muted block mb-1">Cache TTL (minutes)</label>
+            <input
+              id="cache-ttl"
+              type="number"
+              bind:value={semanticCacheTTL}
+              onchange={() => patchSetting({ semanticCacheTTL: parseInt(semanticCacheTTL, 10) || 1440 })}
+              placeholder="1440"
+              class="w-full bg-surface-2 border border-border rounded px-3 py-1.5 text-xs text-text-main focus:outline-none focus:border-primary"
+            />
+          </div>
+          <div>
+            <label for="cache-max-entries" class="text-text-muted block mb-1">Max Entries (Capacity)</label>
+            <input
+              id="cache-max-entries"
+              type="number"
+              bind:value={semanticCacheMaxEntries}
+              onchange={() => patchSetting({ semanticCacheMaxEntries: parseInt(semanticCacheMaxEntries, 10) || 1000 })}
+              placeholder="1000"
+              class="w-full bg-surface-2 border border-border rounded px-3 py-1.5 text-xs text-text-main focus:outline-none focus:border-primary"
+            />
+          </div>
+        </div>
       </div>
     {/if}
   </Card>

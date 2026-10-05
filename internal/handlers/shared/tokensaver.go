@@ -32,6 +32,9 @@ type TokenSaverConfig struct {
 	adhdEnabled             bool
 	adhdLevel               string
 	injectionGuardEnabled   bool
+	semanticCacheEnabled    bool
+	semanticCacheTTL        int
+	semanticCacheMaxEntries int
 }
 
 // NewTokenSaverConfig creates config with initial values.
@@ -64,6 +67,9 @@ func NewTokenSaverConfig(rtk, caveman, ponytail bool) *TokenSaverConfig {
 		adhdEnabled:             false,
 		adhdLevel:               "full",
 		injectionGuardEnabled:   true, // on by default; toggle via settings
+		semanticCacheEnabled:    false,
+		semanticCacheTTL:        1440,
+		semanticCacheMaxEntries: 1000,
 	}
 }
 
@@ -174,6 +180,40 @@ func (c *TokenSaverConfig) SetInjectionGuard(v bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.injectionGuardEnabled = v
+}
+
+// SemanticCacheEnabled reports whether prompt/response caching is active.
+func (c *TokenSaverConfig) SemanticCacheEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.semanticCacheEnabled
+}
+
+// SemanticCacheTTL returns cached response lifetime in minutes.
+func (c *TokenSaverConfig) SemanticCacheTTL() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.semanticCacheTTL <= 0 {
+		return 1440
+	}
+	return c.semanticCacheTTL
+}
+
+// SemanticCacheMaxEntries returns max entries capacity.
+func (c *TokenSaverConfig) SemanticCacheMaxEntries() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.semanticCacheMaxEntries <= 0 {
+		return 1000
+	}
+	return c.semanticCacheMaxEntries
+}
+
+// SetSemanticCache toggles the prompt/response cache.
+func (c *TokenSaverConfig) SetSemanticCache(v bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.semanticCacheEnabled = v
 }
 
 // Snapshot returns all current values.
@@ -296,6 +336,13 @@ func (c *TokenSaverConfig) UpdateFromSettings(s *db.SettingsData) {
 	c.adhdEnabled = s.ADHDEnabled
 	if s.ADHDLevel != "" {
 		c.adhdLevel = s.ADHDLevel
+	}
+	c.semanticCacheEnabled = s.SemanticCacheEnabled
+	if s.SemanticCacheTTL > 0 {
+		c.semanticCacheTTL = s.SemanticCacheTTL
+	}
+	if s.SemanticCacheMaxEntries > 0 {
+		c.semanticCacheMaxEntries = s.SemanticCacheMaxEntries
 	}
 }
 

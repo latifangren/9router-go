@@ -4,6 +4,7 @@ import (
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/providers"
+	"9router/proxy/internal/semanticcache"
 	"9router/proxy/internal/translator"
 	"9router/proxy/internal/updater"
 	"bytes"
@@ -20,6 +21,27 @@ import (
 	"strings"
 	"time"
 )
+
+type cacheCaptureWriter struct {
+	http.ResponseWriter
+	body       bytes.Buffer
+	statusCode int
+}
+
+func (c *cacheCaptureWriter) WriteHeader(code int) {
+	c.statusCode = code
+	c.ResponseWriter.WriteHeader(code)
+}
+
+func (c *cacheCaptureWriter) Write(b []byte) (int, error) {
+	if c.statusCode == 0 {
+		c.statusCode = http.StatusOK
+	}
+	if c.statusCode == http.StatusOK {
+		c.body.Write(b)
+	}
+	return c.ResponseWriter.Write(b)
+}
 
 // HandleChatCompletions handles POST /v1/chat/completions (OpenAI format requests).
 func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -49,14 +71,39 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	ctx := handlerutil.WithSessionID(r.Context(), handlerutil.ExtractSessionID(r))
+	ctx = handlerutil.WithClientAnthropicBeta(ctx, r.Header.Get("anthropic-beta"))
+
+	// Check prompt/response cache for non-streaming requests before model resolution
+	if !reqBody.Stream && h.SemanticCache != nil && h.SemanticCache.Enabled() {
+		var openAIReq translator.OpenAIRequest
+		if err := json.Unmarshal(body, &openAIReq); err == nil {
+			if entry, score, hit := h.SemanticCache.Lookup(ctx, &openAIReq); hit {
+				w.Header().Set("Content-Type", entry.ContentType)
+				w.Header().Set("X-Cache", "HIT")
+				w.Header().Set("X-Semantic-Similarity", fmt.Sprintf("%.4f", score))
+				w.WriteHeader(http.StatusOK)
+				w.Write(entry.ResponseBody)
+				log.Info("chat", "semantic cache hit", "model", reqBody.Model, "similarity", fmt.Sprintf("%.4f", score))
+				return
+			}
+			capture := &cacheCaptureWriter{ResponseWriter: w}
+			w = capture
+			defer func() {
+				if capture.statusCode == http.StatusOK && capture.body.Len() > 0 {
+					_ = h.SemanticCache.Store(ctx, &openAIReq, capture.body.Bytes(), "application/json")
+				}
+			}()
+			ctx = semanticcache.WithCachedRequest(ctx, &openAIReq)
+		}
+	}
+
 	modelInfo, err := h.resolveModel(reqBody.Model)
 	if err != nil {
 		handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	ctx := handlerutil.WithSessionID(r.Context(), handlerutil.ExtractSessionID(r))
-	ctx = handlerutil.WithClientAnthropicBeta(ctx, r.Header.Get("anthropic-beta"))
 	requiredCaps := DetectRequiredCapabilities(body)
 
 	if len(modelInfo.ComboModels) > 0 {

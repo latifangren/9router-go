@@ -82,6 +82,9 @@ export interface Settings {
   headroomUrl?: string
   headroomTimeoutMs?: number
   headroomKompress?: boolean
+  semanticCacheEnabled?: boolean
+  semanticCacheTTL?: number
+  semanticCacheMaxEntries?: number
   autoUpdate?: boolean
   /** Dashboard security & SSO (profile page, Next parity). */
   requireLogin?: boolean

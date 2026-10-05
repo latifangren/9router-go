@@ -13,6 +13,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
+
+	"9router/proxy/internal/semanticcache"
 )
 
 // NewChatHandler creates a ChatHandler with the given repository and a streaming-capable HTTP client.
@@ -38,6 +41,15 @@ func NewChatHandler(repo *db.Repo, ts ...*shared.TokenSaverConfig) *ChatHandler 
 	} else {
 		transport = proxy.NewFallbackTransport(http.DefaultTransport)
 	}
+	var sc *semanticcache.Cache
+	if cfg != nil {
+		sc = semanticcache.New(semanticcache.Config{
+			Enabled:             cfg.SemanticCacheEnabled(),
+			TTL:                 time.Duration(cfg.SemanticCacheTTL()) * time.Minute,
+			MaxEntries:          cfg.SemanticCacheMaxEntries(),
+			SimilarityThreshold: 0.95,
+		}, nil, cfg.SemanticCacheEnabled)
+	}
 	return &ChatHandler{
 		Repo: repo,
 		Client: &http.Client{
@@ -45,6 +57,7 @@ func NewChatHandler(repo *db.Repo, ts ...*shared.TokenSaverConfig) *ChatHandler 
 			Timeout:   0, // no timeout for streaming support
 		},
 		TokenSaver:  cfg,
+		SemanticCache: sc,
 		stickyState: make(map[string]*comboStickyState),
 	}
 }
