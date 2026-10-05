@@ -22,6 +22,27 @@ import (
 	"time"
 )
 
+type cacheCaptureWriter struct {
+	http.ResponseWriter
+	body       bytes.Buffer
+	statusCode int
+}
+
+func (c *cacheCaptureWriter) WriteHeader(code int) {
+	c.statusCode = code
+	c.ResponseWriter.WriteHeader(code)
+}
+
+func (c *cacheCaptureWriter) Write(b []byte) (int, error) {
+	if c.statusCode == 0 {
+		c.statusCode = http.StatusOK
+	}
+	if c.statusCode == http.StatusOK {
+		c.body.Write(b)
+	}
+	return c.ResponseWriter.Write(b)
+}
+
 // HandleChatCompletions handles POST /v1/chat/completions (OpenAI format requests).
 func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
@@ -66,6 +87,13 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 				log.Info("chat", "semantic cache hit", "model", reqBody.Model, "similarity", fmt.Sprintf("%.4f", score))
 				return
 			}
+			capture := &cacheCaptureWriter{ResponseWriter: w}
+			w = capture
+			defer func() {
+				if capture.statusCode == http.StatusOK && capture.body.Len() > 0 {
+					_ = h.SemanticCache.Store(ctx, &openAIReq, capture.body.Bytes(), "application/json")
+				}
+			}()
 			ctx = semanticcache.WithCachedRequest(ctx, &openAIReq)
 		}
 	}

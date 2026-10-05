@@ -80,3 +80,43 @@ func TestChatHandler_SemanticCacheDisabledByDefault(t *testing.T) {
 		t.Fatal("cache hit occurred while cache was disabled")
 	}
 }
+
+func TestChatHandler_CaptureWriterStoresCache(t *testing.T) {
+	cache := semanticcache.New(semanticcache.Config{
+		Enabled:    true,
+		TTL:        time.Hour,
+		MaxEntries: 100,
+	}, nil)
+
+	req := &translator.OpenAIRequest{
+		Model: "gpt-4o",
+		Messages: []translator.OpenAIMessage{
+			{Role: "user", Content: "Store me"},
+		},
+	}
+
+	rec := httptest.NewRecorder()
+	capture := &cacheCaptureWriter{ResponseWriter: rec}
+	capture.WriteHeader(http.StatusOK)
+	_, _ = capture.Write([]byte(`{"result":"ok"}`))
+
+	if capture.statusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", capture.statusCode)
+	}
+	if capture.body.String() != `{"result":"ok"}` {
+		t.Fatalf("expected recorded body, got %s", capture.body.String())
+	}
+
+	err := cache.Store(t.Context(), req, capture.body.Bytes(), "application/json")
+	if err != nil {
+		t.Fatalf("failed to store: %v", err)
+	}
+
+	entry, score, hit := cache.Lookup(t.Context(), req)
+	if !hit || score != 1.0 {
+		t.Fatalf("expected hit, got %v (score %f)", hit, score)
+	}
+	if string(entry.ResponseBody) != `{"result":"ok"}` {
+		t.Fatalf("expected cached body, got %s", string(entry.ResponseBody))
+	}
+}
