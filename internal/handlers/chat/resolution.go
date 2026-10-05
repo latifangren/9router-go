@@ -254,6 +254,7 @@ func (h *ChatHandler) resolveModel(modelStr string) (*ModelInfo, error) {
 				}
 			}
 		}
+		provider = routeModelToOwningProvider(provider, model)
 		return &ModelInfo{Provider: provider, Model: model}, nil
 	}
 
