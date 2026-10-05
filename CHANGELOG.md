@@ -8,6 +8,454 @@
 - **Routing & Provider Isolation**: Routing model berprefix Antigravity (`ag/muse-spark-*`) ke owning executor dipertahankan via `routeModelToOwningProvider` di `internal/handlers/chat/resolution.go`.
 - **Sensor Email & Masking Privasi**: Menambahkan utilitas masking privasi `web/src/lib/privacy.ts` serta tombol toggle sensor email di Quota Tracker, Provider Detail, dan Media view untuk menyamarkan alamat email akun saat screen sharing atau presentasi publik.
 - **Backend Test Coverage**: Peningkatan coverage di 8 paket backend (7 paket ≥85%: `config`, `codexquota`, `usagetracker`, `middleware`, `translator`, `handlerutil`, `proc`, dan `internal/app` 81.7%) untuk mengunci stabilitas sistem.
+
+### 🏷️ Provider kustom bisa memakai URL suffix sendiri — `openai-compatible-chat-<suffix>`, bukan `<uuid>`
+
+Latar (issue #155): setiap node OpenAI/Anthropic-compatible yang dibuat dari
+dashboard memakai `generateId()` untuk ekor provider id-nya, jadi id yang
+tersimpan selalu `openai-compatible-chat-46b3f72a-5618-4485-8527-0eb4424e85db`.
+Id itu bukan label: ia jadi prefix model di `/v1/models`, kolom `provider` di
+`providerConnections`/`usageHistory`/`requestDetails`, dan key seluruh baris
+`customModels` milik node tersebut — sehingga tercatat di mana-mana dan tidak
+bisa dibaca.
+
+Perubahan (`internal/handlers/dashboard/provider_node_id.go`, baru):
+1. `POST /api/provider-nodes` menerima `urlSuffix`. Kalau diisi, ekor id memakai
+   nilai itu (`openai-compatible-chat-bai`); kalau kosong, uuid acak upstream
+   tetap dipakai, jadi tidak ada node lama yang berubah bentuk.
+2. Aturan sufiks: `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. `/` ditolak karena
+   `resolution.go` memecah alamat model dengan `SplitN(entry, "/", 2)` — sufiks
+   ber-/ akan merusak routing; sufiks yang diawali literal provider
+   (`openai-compatible`, `anthropic-compatible`, `custom-embedding`) ditolak
+   karena seluruh pembaca id adalah `strings.HasPrefix`.
+3. Id yang sudah dipakai node lain dijawab **409**
+   `PROVIDER_NODE_ID_CONFLICT`, bukan 500 dari constraint SQLite.
+4. `GET /api/provider-nodes` melaporkan `urlSuffix` + `urlSuffixGenerated`,
+   sehingga field di dashboard menampilkan nilai yang benar untuk node uuid
+   (kosong + generated) alih-alih memaksa user "memperbaiki" uuid.
+5. Field `Custom URL Suffix` di `AddCompatibleNodeModal` (dengan preview id
+   lengkap) dan `EditCompatibleNodeModal`.
+
+**Rename beserta seluruh kakinya** (`internal/db/provider_node_rename.go`, baru).
+`urlSuffix` yang diubah pada edit memindahkan `providerNodes.id`, dan id itu
+storage key dari semua yang dimiliki node tersebut. `RenameProviderNode`
+memindahkan semuanya dalam **satu transaksi**: `providerConnections.provider`,
+key **dan** nilai `kv.customModels`, key `kv.disabledModels`, target
+`kv.modelAliases`, member `combos.models`, kolom `provider` di `usageHistory` +
+`requestDetails`, dan map ber-key provider di blob `settings`
+(`providerStrategies`, `providerOverrides`). Tanpa ini, satu edit akan
+meninggalkan node tanpa kredensial, tanpa model buatan, dan tanpa riwayat.
+`MediaKindView` yang semula memanggil modal dengan prop `nodeType`/`onCreated`
+yang tidak pernah ada ikut diperbaiki ke `type`/`onSubmit`.
+
+Satu koreksi sekuler di jalur yang sama: `isCompatibleProviderID` kini juga
+menerima `custom-embedding-`. Sebelumnya node embedding yang id-nya
+di-generating dengan `openai-compatible-chat-<uuid>` lolos sebagai
+"compatible", dan begitu `urlSuffix` membuat id-nya jadi `custom-embedding-*`,
+jalur tersebut akan fell through ke katalog registry dan `/v1/models`
+mengiklankan provider yang tidak dilayani node itu.
+
+**Verifikasi:** `go vet ./...` bersih · `go test -count=1 ./...` hijau ·
+`bun run build` + `bun run ratchet:svelte` (0 unresolved identifier, 91 error —
+1 di bawah baseline, `bun run ratchet:svelte -- --update` disertakan) ·
+`bun test` 210 pass. Smoke ke binary asli di `DATA_DIR` terisolasi: create
+dengan sufiks menghasilkan `openai-compatible-chat-bai`, tanpa sufiks tetap
+uuid, 409 saat bentrok, 400 untuk sufiks ber-`/`, lalu **rename** `bai` →
+`bai-v2` yang terbukti ikut memindahkan koneksi, `customModels`,
+`disabledModels`, alias, member combo, `usageHistory`, `requestDetails`, dan
+kedua map `settings` — `POST /v1/chat/completions {"model":"bai/glm-5.3"}`
+lalu dijawab upstream (`"content":"routed"`) dan tercatat di `usageHistory`
+dengan provider `openai-compatible-chat-bai-v2`, sementara `/v1/models`
+tetap mengiklankan `bai/glm-5.3` tanpa membocorkan id mentah.
+
+### ✨ `feat(connections): ganti API key langsung dari modal Edit Connection` (issue #154)
+
+Modal Edit Connection di tab **Providers** dan di **Quota Tracker** sekarang
+punya kolom API. Isian kosong berarti "memakai key yang tersimpan", bukan
+"hapus key" — itu yang membuat modal ini bisa dipakai untuk rotasi tanpa
+menyalin key lama ke input teks.
+
+Kolomnya menampilkan key yang tersimpan sebagai mask (`sk-smo…inal`) dari
+`apiKeyMasked`, hasil baru di `GET /api/connections`. Mask, bukan key mentah,
+karena endpoint itu terjangkau dengan API key klien berprivat rendah: key
+mentah di sana berarti satu key bocor bisa mencuri seluruh secret. Bentuk
+mask-nya sama dengan `maskClientKey` yang sudah dipakai untuk daftar
+`/api/keys`.
+
+`PUT /api/connections/{id}` sekarang menerima `apiKey`:
+
+- `apiKey` tidak ada atau kosong setelah `TrimSpace` → key tersimpan utuh.
+- `apiKey` terisi → hanya `data.apiKey` yang ditulis. `authToken`,
+  `providerSpecificData`, dan status probe tidak disentuh.
+
+Handler sengaja **tidak** mengubah `testStatus`/`lastError` saat rotasi.
+Mengganti key bukan bukti koneksi kembali hidup — satu-satunya buktinya
+jawaban provider, jadi modal yang meng-clear-nya setelah probe benar-benar
+menjawab, dengan mengirim `testStatus: "active"` secara eksplisit (parity
+dengan `EditConnectionModal` upstream).
+
+Modal menjalankan probe `/api/providers/validate` sebelum menulis:
+
+- key ditolak provider → **tidak disimpan**, modal tetap terbuka dengan
+  alasannya. Key yang tersimpan adalah satu-satunya yang menjaga akun ini di
+  rotasi, jadi key yang salah akan diam-diam dikeluarkan.
+- provider tanpa probe (`supported: false`) → bukan verdict, key tetap
+  disimpan tanpa `testStatus` yang dikoreksi.
+- field OAuth disembunyikan: yang dirotasi access token, bukan stuff yang
+  diketik user.
+
+Logika bersama ada di `web/src/components/connections/credential.ts`
+(placeholder, pemangkasan whitespace, pemetaan verdict, probe) supaya kedua
+modal tidak mengulang aturan yang sama.
+
+Upstream parity: `decolua/9router` `src/shared/components/EditConnectionModal.js`
+— label "Leave blank to keep the current API key.", tombol Check via
+`/api/providers/validate`, dan `testStatus` hanya di-set saat validasi sukses.
+
+## [v1.9.9] - 2026-10-05
+
+### 🐛 `TestGateAcquire_JitterOnlyWidensTheGap` masih flaky — stopwatch diukur dari slot sebelumnya
+
+PR #146 menaikkan floor 30ms → 40ms dan changelog-nya menyatakan test itu
+dipertahankan karena "tidak ada bukti ia perlu disentuh". Di branch ini
+buktinya ada, dan kali ini bukan margin yang kurang: `go test -race -shuffle=on
+./...` gagal
+
+```
+fetchgate (4 passed, 1 failed)
+  [FAIL] TestGateAcquire_JitterOnlyWidensTheGap
+     gate_test.go:115: slot 5 waited 39.4323ms, want at least the 40ms floor
+```
+
+`go test ./internal/fetchgate/ -race -count=8` sendirian hijau, jadi ini
+beban-suite, bukan gate. Akar masalahnya batas stopwatch: loop mengukur
+`time.Since(start)` dengan `start := time.Now()` yang diambil **setelah**
+`Acquire` sebelumnya kembali. Floor gate adalah properti *reservasi* —
+`reserve` menerbitkan `start`, lalu tidur sampai `start` — sehingga slot yang
+dijanjikan selalu berjarak `minGap`, kecuali latensi bangun goroutine
+sebelumnya ikut dipotong dari gap berikutnya.
+Angka `start` diukur setelah itu, jadi latensi yang tidak ada hubungannya
+dengan gate ikut terpotong dari gap yang sedang diuji. Itu juga alasan indeks
+gagalnya selalu di tengah-tengah dan berpindah-pindah: hanya soal seberapa
+lambat goroutine sebelumnya kebetulan dibangunkan.
+
+Menaikkan floor lagi hanya memperpanjang test, tidak memperbaiki ukurannya.
+Pengukuran dipindah ke sumber yang benar — start yang dijanjikan gate:
+
+1. `TestGateAcquire_JitterOnlyWidensTheGap` membandingkan `start` yang
+   dikeluarkan `reserve`, jadi bebas-noise total, sambil tetap memverifikasi
+   assertion aslinya: tidak ada gap di bawah floor, dan minimal satu gap
+   lebih lebar dari floor sehingga jitter benar-benar ikut bermain. Draw
+   semua nol delapan kali berpeluang `(1/61)^8`, jadi run tanpa jitter sama
+   sekali bukan hasil nyata.
+2. `TestGateAcquire_FloorHoldsWithoutJitter` baru, deterministik: dengan
+   jitter dimatikan tiap gap harus **tepat** `minGap`. Inilah yang menangkap
+   floor yang dihapus — test ber-jitter tidak bisa, karena draw di bawah
+   `minGap` itu sah.
+3. `TestGateAcquire_WaitsOutTheReservedSlot` baru: `Acquire` benar-benar
+   menunggu slot yang ia reservasi. Stopwatch-nya dimulai **sebelum**
+   reservasi, jadi satu-satunya yang bisa hilang adalah timer yang terlalu
+   cepat — dan timer Go terlambat, tidak pernah cepat — sehingga arah
+   pengukuran ini aman untuk diasersikan persis.
+
+`internal/fetchgate/gate.go` tidak tersentuh: nol perubahan produksi.
+
+**Verifikasi:** `go vet ./internal/fetchgate/` bersih ·
+`go test ./internal/fetchgate/ -race -count=3` hijau ·
+`go test ./internal/fetchgate/ -race -count=5 -p 16` hijau. Kekuatan test
+dibuktikan dengan sengaja menghapus floor
+(`g.next = start.Add(g.jitter())`), yang membuat keempat test gagal —
+termasuk `JitterOnlyWidensTheGap` di `slot 3` dengan
+`32.86ms < 40ms`, dan itu pun deterministik: pengukurannya tidak lagi
+bergantung pada penjadwalan.
+
+### 🏷️ Nama provider asli tampil di tab Details pada dashboard Usage
+
+Latar: kolom `Provider` di tab **Details** (`/dashboard/usage`) menampilkan
+`item.provider` mentah. Untuk provider kustom, nilai itu id sintetis
+(`openai-compatible-chat-<uuid>`), jadi tabel terbaca
+`openai-compatible-chat-46b3f72a-5618-4485-8527-0eb4424e85db` alih-alih nama
+yang dikonfigurasi user (`tiarina`).
+
+Parity: upstream memakai `getProviderName(detail.provider, cache)` di
+`RequestDetailsTab.js`, dengan cache gabungan `AI_PROVIDERS` +
+`providerNodes` (`node.id → node.name`). Sumber nama itu persis yang sudah
+dipakai kartu topologi di port ini (`AnalyticsView.topologyName`).
+
+Perbaikan (`web/src/components/analytics/`):
+1. `providerDisplayName()` baru di `types.ts` — node kustom menang lebih dulu,
+   lalu nama katalog, lalu id apa adanya.
+2. `RequestDetailsTab` menerima `providerNodes` dan memakai nama itu di badge
+   tabel **dan** di header modal inspector. Id mentah tetap tersedia sebagai
+   `title` (tooltip) dan di panel Payload, jadi tidak ada informasi yang hilang.
+3. Kolom breakdown di tab Overview **tidak** disentuh — `provider` di sana
+   sudah di-resolve server (`nodeNameMap` di
+   `internal/handlers/usage_stats.go:191`).
+
+**Verifikasi:** `bun test` (210 pass, termasuk 4 kasus baru untuk
+`providerDisplayName`), `bun run ratchet:svelte` (0 unresolved identifier,
+92 error = baseline), dan smoke ke instance dengan 9.862 baris `requestDetails`:
+baris yang sebelumnya terbaca `openai-compatible-chat-46b3f72a-…` kini
+`tiarina` / `OpenCode Zen`, icon `/providers/oai-cc.png` tetap terpakai.
+
+### 🩺 Penolakan proxy egress kini terlihat di Usage & Analytics
+
+Latar: `tryForwardWithConnection` gagal **terlalu awal** saat pool proxy yang
+terikat tidak bisa melayani traffic (`internal/proxy/connections_proxy.go:88-98`
+— pool tidak ada / nonaktif / tanpa url). Jalur itu `return` di
+`fallback.go:410` **sebelum** `LogFailure` dan sebelum `TrackPending` menutup
+dengan `isError`, sehingga penolakan `502 proxy_error` tidak tercatat di mana
+pun: nol baris `usageHistory` (benar), tapi juga nol baris
+`requestDetails`. Di dashboard `/dashboard/usage`, request tersebut sama
+sekali tidak terlihat — user cuma melihat HTTP 502 di client tanpa jejak.
+
+Parity: upstream mencatat kondisi yang sama. Kondisi identik di Next.js
+*throw* dari dalam `executor.execute` (`open-sse/utils/proxyFetch.js`,
+"Proxy required but failed"), sehingga catch di `open-sse/handlers/chatCore.js`
+menulis `saveRequestDetail({status: "error"})` **dan**
+`trackPendingRequest(..., false, true)`. 9router-go sekarang mencatat keduanya.
+
+Perbaikan (`internal/handlers/chat/fallback.go`):
+1. `fwdErr` di-assign sebelum `return`, jadi defer `TrackPending` melaporkan
+   `isError=true` dan kartu topologi menandai provider sebagai error
+   terakhir (`usagetracker.ErrorProvider`, jendela 10 detik).
+2. Satu baris `LogFailure` — tetap hanya `requestDetails` dengan
+   `status="error"`; agregat Overview (`usageHistory`/`usageDaily`) tidak
+   disentuh, sesuai upstream yang `saveRequestUsage()` hanya dipanggil dari
+   `buildOnStreamComplete`.
+3. Body error **di-marshal**, bukan dirangkai string. Sebelumnya
+   `[]byte(`{"error":{...,"message":"` + clientErr.Error() + `"}}`)` — pool id
+   milik user, dan tanda kutip di dalamnya membuat payload tidak lagi JSON
+   valid. Akibatnya `extractErrorText` gagal parse dan baris tersimpan
+   berbunyi `"request failed"`; sekarang alasannya terbaca apa adanya.
+
+Jalur **tidak** diubah: `no API key found` (`fallback.go:260`) juga tidak
+mencatat baris, dan itu memang sesuai upstream — `src/sse/handlers/chat.js:248`
+ mengembalikan `errorResponse(404, "No active credentials for provider")`
+ tanpa `saveRequestDetail`.
+
+**Verifikasi:** `internal/handlers/chat/proxy_egress_failure_test.go`
+(table-driven; pool nonaktif + pool id berisi tanda kutip) membuktikan body ke
+client valid JSON dan menyebut poolnya, tepat 1 baris `requestDetails`
+ `status='error'`, 0 baris `usageHistory`. `go vet ./internal/handlers/chat/`
+ bersih · `go test -race ./internal/handlers/chat/ ./internal/proxy/...` hijau.
+ Smoke live di port 20141 (binary baru, DATA_DIR kosong): request
+ `deepseek/deepseek-chat` ke koneksi terikat pool yang dihapus → client
+ menerima `502 {"error":{"type":"proxy_error","message":"proxy pool
+ \"pool-\\\"gone\\\"\" is assigned but does not exist"}}`,
+ `/api/usage/request-details` melaporkan `total=1` dengan
+ `response.status=502` dan pesan yang menyebut pool,
+ `/api/usage/stats` tetap `byProvider={}` dengan `errorProvider="deepseek"`.
+
+### 🛡️ Combo mendeteksi error yang di-inject provider ke dalam SSE stream
+
+Latar: combo `["oc/space-bunny-free", "openrouter/stealth/space-bunny-alpha",
+"ocz/space-bunny-free"]` gagal 10x berturut-turut dengan pesan client
+`502 JSON error injected into SSE stream`. Dari `requestDetails` produksi,
+penyebabnya bukan gateway: downstream `Stealth` di belakang OpenRouter mati
+(`provider_unavailable`), lalu OpenRouter me-relay kegagalan itu sebagai event
+`data: {"choices":[],"error":{"code":502,...}}` di atas HTTP 200. Gateway
+me-relay chunk itu mentah-mentah — turn tercatat `success`, koneksi sakit
+tidak pernah di-lock, jadi setiap retry mendarat di lubang yang sama.
+
+Perbaikan (tanpa holdback, TTFT tidak berubah — deteksi inline per baris):
+`internal/proxy/sse_inband.go` baru berisi `DetectInbandSSEError` yang
+agnostik-provider — gagal untuk **setiap** payload `data:` ber-`error`
+non-null (bentuk OpenAI maupun event `error` Claude), tanpa memeriksa nama
+provider, model, atau teks pesan tertentu. `sseCopier` menelan (swallow)
+baris error itu, menutup turn error-only dengan frame error milik gateway
+sendiri, dan melaporkan `UpstreamFailure(502)` sehingga jalur combo yang
+sudah ada me-lock koneksi (`comboLockRetryable`) untuk retry berikutnya.
+Turn yang sudah sempat mengirim completion tetap dianggap sukses (aturan
+yang sama dengan codex stream). Strategi combo tidak berubah: round-robin
+tetap berotasi, hanya melewati koneksi yang sedang di-lock selama cooldown.
+
+Batasan yang disadari: jalur `ScanStream` ber-translate (client Claude,
+decloaker) belum dipasangi detektor ini; cakupan awal adalah `SSECopy`
+(OpenAI-format streaming) tempat kasus produksi terjadi. Perilaku
+post-commit loop combo tidak diubah (failover dalam request yang sama tetap
+mustahil setelah header 200 terkirim — sesuai pesan log yang sudah ada
+`upstream error after headers committed`).
+
+**Verifikasi:** unit table-driven (`sse_inband_test.go`, termasuk chunk
+Stealth asli) + `TestSSECopy_InbandErrorOnlyStreamFails`,
+`TestSSECopy_CompletedTurnIgnoresTrailingInbandError`,
+`TestSSECopy_HealthyStreamUnaffectedByInbandDetection`, dan integration
+`TestComboSkipsInbandErrorOnRetry` (fake upstream sakit + sehat: request
+pertama membawa frame error gateway tanpa chunk mentah provider, retry
+langsung dilayani member sehat tanpa menyentuh upstream sakit). Satu bug
+urutan flag (`hasTerminal` diset sebelum `inbandFailure` dibaca) tertangkap
+oleh test ini saat implementasi.
+
+Catatan paritas: path upstream lokal (`/Users/luqmannul.hakim/htdocs/9router`)
+tidak tersedia di host ini, jadi belum bisa dicocokkan dengan
+`open-sse` — perubahan ini aditif (stream sehat byte-identik, hanya stream
+error-only yang berubah dari silent-success menjadi 502) dan dicatat di sini
+bila upstream berperilaku beda.
+### 🩹 Rotasi proxy pool opencode: rotasi yang benar-benar lewat proxy
+
+Pada provider opencode, memilih rotasi (round-robin/random) tidak memakai pool
+warp yang sudah dipasang — request tetap jalan direct. Kolom egress di usage
+juga selalu menulis "direct" untuk request yang sebenarnya lewat proxy HTTP,
+dan kolom "bound" di halaman proxy-pools selalu 0 untuk pool yang dipasang
+level provider karena hanya koneksi yang dihitung.
+
+Sekarang rotasi memutar request ke seluruh pool aktif, kolom egress menampilkan
+nama pool, dan kolom bound menghitung pemasangan level provider. Rotasi hanya
+berlaku untuk pengaturan rotasi proxy; rotasi round-robin koneksi tidak berubah
+perilakunya.
+
+Perbaikan lanjutan dari review:
+
+- **Rotasi pool tidak lagi menyalakan rotasi koneksi.** Kartu provider menyimpan
+  dua rotasi ke satu entri: blok `isNoAuth` menulis rotasi **pool** ke
+  `rotateStrategy`, tombol round-robin menulis rotasi **koneksi** ke
+  `fallbackStrategy`, dan keduanya dibaca ke field yang sama. Provider NoAuth
+  kini hanya mempercayai `fallbackStrategy` untuk rotasi koneksi, jadi memilih
+  rotasi pool tidak ikut membuat akun berganti.
+- **Rotasi pool hanya berlaku untuk provider NoAuth.** Itu persis di mana UI
+  menawarkannya. Di provider ber-API-key, `rotateStrategy` berisi rotasi akun,
+  dan menjadikannya steer egress akan mengirim trafik lewat pool yang tidak
+  pernah dikonfigurasi operatornya.
+- **Guard hapus pool menutup celah rotasi.** Rotasi memakai seluruh pool aktif,
+  tapi `countProxyPoolBindings` hanya menghitung pool yang di-pin. Pool yang
+  sedang melayani trafik rotasi bisa dihapus (200) di bawah request berikutnya;
+  sekarang ditolak 409. Pool yang di-pin sekaligus dipakai rotasi tetap
+  dihitung satu binding, bukan dua.
+- **`sticky` ditolak sebagai strategi rotasi pool.** Nilai ini diterima lalu
+  dilayani sebagai round-robin, padahal resolver ini tidak mengimplementasikan
+  afinitas. UI hanya menawarkan round-robin dan random, jadi tidak ada yang
+  kehilangan opsi.
+- **Counter rotasi per-provider**, di-key dengan alias yang sudah di-resolve
+supaya `oc` dan `opencode` berbagi kursor dan tidak saling melompati.
+- **`ListProxyPools()` tidak lagi dipanggil di hot path.** Kandidat rotasi dibaca
+dengan query yang memfilter di SQL, disimpan di cache per-`Repo` (bukan state
+paket, supaya dua `Repo` atas database berbeda tidak saling membaca pool),
+dan di-invalidate di setiap mutasi pool — sesuai AGENTS.md §4.A.
+
+### 📖 README: cara memakai database 9Router langsung, tanpa import
+
+Pertanyaan yang paling sering masuk — "bisa nggak import dari 9router?" — sudah
+terjawab di dokumentasi, tapi jawabannya tersebar: satu kalimat di `DATABASE.md`
+dan operator checklist yang justru menyuruh jalankan upstream dulu. Yang kedua
+salah untuk kasus yang paling sering terjadi, karena `EnsureCoreSchema` sudah
+meng-tolerant database yang ada. Hasilnya pembaca menyimpulkan harus migrasi
+manual, padahal tidak ada yang perlu diimpor sama sekali.
+
+Section baru `🔄 Sharing a database with 9Router` di README menyatakan soal ini
+tegas di depan: kedua proyek menunjuk `DATA_DIR/db/data.sqlite` yang sama,
+9router-go membukanya apa adanya, dan providers, connections, proxy pools,
+combos, API keys, model aliases, serta usage history langsung terbaca. Tidak ada
+langkah import, export, atau migrasi. Dua mode operasional dijelaskan: ganti
+sepenuhnya (berhenti 9Router, jalankan 9router-go), atau berdampingan di port
+berbeda dengan `DATA_DIR` yang sama. Arah sebaliknya juga aman — dua kolom
+Go-only dan tabel `upstream_leases` diabaikan upstream karena sinkronisasi
+skemanya additive.
+
+Batasnya ditulis apa adanya, tidak dipoles: tidak ada import JSON legacy, tidak
+ada migrasi destruktif atau backup pra-migrasi, dan `_meta.schemaVersion` tidak
+ditafsirkan — DB dari rilis 9Router yang jauh lebih baru wajib dicek manual.
+Operator checklist di `DATABASE.md` dikoreksi agar tidak menyuruh menjalankan
+upstream lebih dulu; baris "Default path" di tabel compatibility Boundaries
+dipperjelas bahwa tidak ada langkah import.
+
+**Verifikasi:** tidak sekadar diklaim dari dokumentasi. Fixture SQLite dibentuk
+dengan bentuk upstream — 11 tabel inti, `providerConnections` tanpa
+`lastUsedAt`/`consecutiveUseCount`, tanpa `upstream_leases`, berisi satu
+connection, satu API key, satu combo, satu scope KV, dan satu baris
+`usageHistory`. Binary hasil `make build` dijalankan terhadap fixture itu
+(`DATA_DIR` sama, port `:20197`): `/health` 200, login 200, `/api/connections`
+mengembalikan connection upstream apa adanya, `/api/settings` membaca
+`requireLogin`/`rtkEnabled` dari baris settings upstream, `/api/usage/stats`
+200, dan `GET /v1/models` dengan `Bearer sk-upstream-existing-key` (API key yang
+disimpan upstream) mengembalikan katalog model — sehingga bukan hanya baris
+terbaca, tapi juga benar-benar dipakai jalur proxy. Setelah boot, fixture
+memang mendapat tambahan `lastUsedAt`, `consecutiveUseCount`, dan
+`upstream_leases`, dan seluruh baris upstream tetap utuh. Jalur fresh-`DATA_DIR`
+diverifikasi terpisah (port `:20198`): 13 tabel terbentuk,
+`_meta.schemaVersion=1`, `settings` berisi baris kosong, `/health` 200. Kedua
+instance dimatikan dan port-nya dilepas.
+
+### 🐛 `make web-build` hanya rebuild saat `dist` hilang — dashboard tetap bundle lama
+
+`web-build` sebelumnya deciding "rebuild kalau `web/dist/index.html` tidak ada".
+Jahatnya, itu benar di checkout segar dan salah di setiap mesin yang sudah punya
+`dist`: menarik atau fast-forward `main` mengubah `web/src` sementara
+`web/dist` tetap di tempat, jadi SPA tidak pernah dibangun ulang dan `go build`
+membenamkan bundle lama. Gejalanya dashboard terlihat seperti rilis sebelumnya
+sementara sisi Go sudah mutakhir, dan satu-satunya obatnya `FORCE=1 make
+web-build` yang tidak diingat siapa pun. Terjadi nyata pada 2026-10-04: fast-
+forward ke `bfa0e954` menyisakan `index-BvXlfcRR.js` di `dist`, sementara
+sumber sudah 7 file lebih baru.
+
+Keputusan: nilai kesegaran pindah ke `web/scripts/web-build.ts`, yang
+mengfinger-print setiap input build — `web/src`, `web/public`, `package.json`,
+`bun.lock`, ketiga tsconfig, `vite.config.ts`, `web/index.html` — lalu
+membangun ulang saat fingerprint berubah. Isi file ikut hashed, bukan hanya
+mtime: `bun install` dan `git checkout` dapat menyetel ulang timestamp tanpa
+memindahkan satu byte pun. `bun.lock` dan `package.json` dihitung karena
+bump dependency mengubah bundle tanpa menyentuh `web/src` — kelas yang akan
+terlewat oleh watcher src-saja.
+
+Stamp disimpan di `web/.dist-stamp`, sengaja di luar `web/dist`: berkas
+bernama `.*` yang ada langsung di dalam `dist` ikut tertangkap
+`//go:embed dist/*` dan akan membocorkan fingerprint build sebagai route yang
+bisa diunduh. Stamp baru ditulis setelah build sukses, jadi build yang gagal
+meninggalkan stamp lama dan run berikutnya mencoba lagi, bukan melompat.
+
+Kebijakan `FORCE=1` dipertahankan sebagai jalan pintas eksplisit.
+
+**Verifikasi:** `bun test` 181/181 (10 test baru `web/scripts/web-build.test.ts`
+menutup: edit di `src`, berkas baru bersarang, bump manifest tanpa bump
+lockfile, rename dengan byte identik, `dist` dan `node_modules` diabaikan);
+`make web-build` dua kali berturut-turut — run pertama membangun dan mencatat
+stamp `1ce65ad06890`, run kedua "web/dist is up to date (inputs unchanged)";
+menyentuh `Sidebar.svelte` memicu build ulang, `git checkout` mengembalikan
+fingerprint ke `1ce65ad06890`. `tsc -b` bersih, `oxlint` tanpa warning baru
+(2 warning yang ada sudah pre-existing di `CreateComboModal.svelte` dan
+`clipboard.test.ts`), `make vet-svelte` 92 error = baseline, `go test ./web/...`
+8/8. Smoke: instance probe menyajikan `index-Ba3m-vxm.js` (JS 200, 899.073
+byte) yang sama dengan yang disajikan proses yang sudah berjalan, jadi proses
+lama sudah benar-benar menjalankan binary hasil rebuild.
+
+### 🎨 Console Log: tag dan pesan menempel jadi `requestGET`
+
+Baris Console Log dirender dari `{#if parts}<span>{parts.tag}</span> {/if}{parts.message}`.
+Spasi literal di ujung blok `{#if}` dipangkas Svelte sebagai *text node* batas
+blok, jadi yang tampil `requestGET /models` atau `usageLogged provider=...` —
+method, path, dan status menyatu tanpa jeda sehingga sulit dipindai.
+
+Spasi sekarang dikirim eksplisit lewat ekspresi `{' '}`. Baris tanpa tag
+(mis. stdout yang tertangkap) tidak berubah.
+
+### ✨ Proxy Pools: tombol Test All, badge latency, dual-probe, dan kontrol filter
+
+Health Check proxy pool lama hanya hidup di toolbar seleksi — kalau tidak ada
+yang terseleksi, tombolnya tidak ada. Sekarang ada **Test All** permanen di
+header, dengan progres `n/N` dan badge latency yang repaint per baris begitu
+tiap probe selesai, jadi status terlihat tanpa menunggu satu job penuh.
+
+Probe backend jadi dua tahap: **Google `generate_204` → Cloudflare
+`cdn-cgi/trace`**. Satu endpoint saja salah baca pada jaringan yang memblokir
+Google — proxy yang sehat dilaporkan mati, lalu user mematikan pool yang
+masih bisa dipakai. Yang menentukan bagi badge: latency yang dilaporkan dan
+disimpan selalu milik probe yang **memutuskan** hasil, bukan total waktu
+tunggu; primary yang lambat lalu gagal tidak mewariskan 200ms-nya ke badge
+fallback yang cepat. Pool gagal disimpan dengan latency `0` supaya angka tak
+terukur tidak pernah terbaca sebagai angka bagus.
+
+Dashboard dapat filter status (All / Active / Passed / Failed — `failed`
+dan `error` upstream digabung satu bucket), pengurutan (Fastest, Recently
+Tested, Name), dan dua aksi pembersihan: **Disable Failed** dan **Delete
+Failed**. Ketiganya sekarang melaporkan **hanya hasil yang benar-benar
+dikonfirmasi server**; sebelumnya `Delete Failed` membuang error non-409
+diam-diam lalu tetap berbunyi sukses, jadi user bisa mengira proxy sudah
+bersih padahal masih aktif dan tetap dipakai routing.
+
+Catatan parity: upstream `decolua/9router` masih probe `https://google.com/`
+dengan HEAD 8s dan menulis `testStatus: "active" | "error"`. Dua kosakata itu
+tetap diterima di UI, sementara gateway sendiri menulis `passed`/`failed`
+seperti sebelumnya.
 ### 🩹 Test live upstream dipisah dari CI lewat opt-in eksplisit
 
 19 test di `internal/handlers/chat/` memanggil provider sungguhan dengan
