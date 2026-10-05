@@ -2906,7 +2906,7 @@
           {/if}
           {#if isTestingOneByOne && oneByOneCurrentId}
             <span>
-              Running: {providerConnections.find((conn) => conn.id === oneByOneCurrentId)?.name || oneByOneCurrentId}
+              Running: {formatEmailLabel(providerConnections.find((conn) => conn.id === oneByOneCurrentId)?.name || oneByOneCurrentId, $emailPrivacy)}
             </span>
           {/if}
         </div>

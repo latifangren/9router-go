@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+
+### 🔒 OAuth Refresh Singleflight, Sensor Email Privasi, & Peningkatan Backend Test Coverage
+
+- **OAuth Refresh Singleflight**: Membungkus refresh token OAuth kedaluwarsa (`refreshOAuthTokenIfExpired` & `forceRefreshOAuthToken` di `internal/handlers/chat/gemini_handler.go`) dengan `singleflight.Group` per `connectionID` untuk mencegah thundering-herd dan race condition pada request paralel.
+- **Routing & Provider Isolation**: Routing model berprefix Antigravity (`ag/muse-spark-*`) ke owning executor dipertahankan via `routeModelToOwningProvider` di `internal/handlers/chat/resolution.go`.
+- **Sensor Email & Masking Privasi**: Menambahkan utilitas masking privasi `web/src/lib/privacy.ts` serta tombol toggle sensor email di Quota Tracker, Provider Detail, dan Media view untuk menyamarkan alamat email akun saat screen sharing atau presentasi publik.
+- **Backend Test Coverage**: Peningkatan coverage di 8 paket backend (7 paket ≥85%: `config`, `codexquota`, `usagetracker`, `middleware`, `translator`, `handlerutil`, `proc`, dan `internal/app` 81.7%) untuk mengunci stabilitas sistem.
 ### 🩹 Test live upstream dipisah dari CI lewat opt-in eksplisit
 
 19 test di `internal/handlers/chat/` memanggil provider sungguhan dengan
@@ -571,12 +578,6 @@ tidak pernah di tengah stream.
 > Run ulang pada branch ini (`-count=3` di `-p 1` dan `-p 16`, plus dua run
 > penuh `go test ./...`) semuanya hijau, jadi ini kontensi CPU pada run paralel,
 > bukan regresi.
-
-### 🔒 Penegakan Strict Provider Isolation & Concurrency Singleflight
-
-- **Strict Provider Isolation**: Menghapus jalan pintas `routeModelToOwningProvider` di `internal/handlers/chat/resolution.go` dan prefix silang `antigravity/` / `ag/` di executor OpenCode (`internal/proxy/executor/opencode_zen.go` & `providers.go`). Seluruh model di-route secara seragam berdasarkan katalog dan alias resmi, mematuhi kontrak arsitektur di `AGENTS.md`.
-- **OAuth Refresh Singleflight**: Membungkus refresh token OAuth kedaluwarsa (`refreshOAuthTokenIfExpired` & `forceRefreshOAuthToken` di `internal/handlers/chat/gemini_handler.go`) dengan `singleflight.Group` per `connectionID` untuk mencegah thundering-herd dan race condition pada request paralel.
-- **Test Coverage Backend $\ge$ 85%**: Menambahkan unit test komprehensif pada 8 paket backend (`config`, `codexquota`, `usagetracker`, `middleware`, `translator`, `app`, `handlerutil`, `proc`), serta mengeliminasi bottleneck sleep 60s pada `proc_test.go` sehingga suite berjalan instan (< 1s).
 
 ### 🐛 Rotasi round-robin macet: stempel `lastUsedAt` tidak pernah maju — issue #107
 

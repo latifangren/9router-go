@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { api, getStoredAPIKey, type APIKey, type ProviderConnection, type Settings } from '../../api/client'
+  import { emailPrivacy, formatEmailLabel } from '../../lib/privacy'
   import { copyToClipboard } from '../../lib/clipboard'
   import { getModelKind, getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from '../../lib/models'
   import { parseCustomModelsResponse, subscribeCustomModelsChanged } from '../../lib/customModels'
@@ -187,17 +188,23 @@
 
   function handleOpenEditConn(conn: ProviderConnection) {
     editingConn = conn
-    editConnName = conn.displayName || conn.name || ''
+    editConnName = formatEmailLabel(conn.displayName || conn.name, $emailPrivacy) || ''
     isEditingActive = conn.isActive === 1
   }
 
   async function handleSaveEditedConn() {
     if (!editingConn) return
     try {
-      await api.updateConnection(editingConn.id, {
-        name: editConnName.trim(),
+      const payload: { name?: string; isActive?: number } = {
         isActive: isEditingActive ? 1 : 0
-      })
+      }
+      const trimmed = editConnName.trim()
+      const original = (editingConn.displayName || editingConn.name || '').trim()
+      const masked = formatEmailLabel(original, $emailPrivacy).trim()
+      if (trimmed !== original && trimmed !== masked) {
+        payload.name = trimmed || undefined
+      }
+      await api.updateConnection(editingConn.id, payload)
       editingConn = null
       onRefresh()
     } catch (err) {
@@ -736,7 +743,7 @@
                   </button>
                 </div>
                 <span class="material-symbols-outlined text-base text-text-muted shrink-0">key</span>
-                <span class="text-sm font-medium text-text-main truncate">{conn.displayName || conn.name || conn.email || conn.id}</span>
+                <span class="text-sm font-medium text-text-main truncate">{formatEmailLabel(conn.displayName || conn.name || conn.email || conn.id, $emailPrivacy)}</span>
                 <button
                   type="button"
                   onclick={() => handleToggleConnActive(conn)}
@@ -931,7 +938,7 @@
           >
             <option value="">Auto (by priority)</option>
             {#each providerConns as conn}
-              <option value={conn.id}>{conn.displayName || conn.name || conn.email || conn.id.slice(0, 8)}</option>
+              <option value={conn.id}>{formatEmailLabel(conn.displayName || conn.name || conn.email || conn.id.slice(0, 8), $emailPrivacy)}</option>
             {/each}
           </select>
         </div>
