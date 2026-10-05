@@ -70,6 +70,9 @@ type SettingsData struct {
 	HeadroomCodeAware          bool                            `json:"headroomCodeAware"`
 	HeadroomKompress           bool                            `json:"headroomKompress"`
 	HeadroomTimeoutMs          int                             `json:"headroomTimeoutMs"`
+	SemanticCacheEnabled       bool                            `json:"semanticCacheEnabled"`
+	SemanticCacheTTL           int                             `json:"semanticCacheTTL,omitempty"`
+	SemanticCacheMaxEntries    int                             `json:"semanticCacheMaxEntries,omitempty"`
 	AutoUpdate                 bool                            `json:"autoUpdate"`
 	FallbackStrategy           string                          `json:"fallbackStrategy,omitempty"`
 	StickyRoundRobinLimit      int                             `json:"stickyRoundRobinLimit,omitempty"`
@@ -114,6 +117,9 @@ func DefaultSettings() *SettingsData {
 		HeadroomUrl:       "http://localhost:8787",
 		HeadroomKompress:  true,
 		HeadroomTimeoutMs: 3000,
+		SemanticCacheEnabled:     false,
+		SemanticCacheTTL:         1440,
+		SemanticCacheMaxEntries:  1000,
 		AutoUpdate:        false,
 		CapacityAdapter: map[string]CapacityAdapterEntry{
 			"vision":     {Enabled: true, RoundRobin: false, Models: []string{}},
@@ -219,6 +225,15 @@ func (r *Repo) GetSettings() (*SettingsData, error) {
 	}
 	if v, ok := raw["headroomTimeoutMs"].(float64); ok && v > 0 {
 		s.HeadroomTimeoutMs = int(v)
+	}
+	if v, ok := raw["semanticCacheEnabled"].(bool); ok {
+		s.SemanticCacheEnabled = v
+	}
+	if v, ok := raw["semanticCacheTTL"].(float64); ok && v > 0 {
+		s.SemanticCacheTTL = int(v)
+	}
+	if v, ok := raw["semanticCacheMaxEntries"].(float64); ok && v > 0 {
+		s.SemanticCacheMaxEntries = int(v)
 	}
 	if v, ok := raw["autoUpdate"].(bool); ok {
 		s.AutoUpdate = v
