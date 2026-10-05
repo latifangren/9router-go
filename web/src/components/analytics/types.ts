@@ -159,3 +159,21 @@ export function timeAgo(timestamp?: string): string {
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
   return `${Math.floor(diff / 86400)}d ago`
 }
+
+export function formatDuration(ms?: number | null): string {
+  if (ms == null || isNaN(ms)) return '—'
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+export function calculateTPS(
+  completionTokens?: number | null,
+  durationMs?: number | null,
+  ttftMs?: number | null
+): string | null {
+  if (!completionTokens || completionTokens <= 0 || !durationMs || durationMs <= 0) return null
+  const genTimeMs = ttftMs && ttftMs > 0 && ttftMs < durationMs ? durationMs - ttftMs : durationMs
+  if (genTimeMs <= 0) return null
+  const tps = (completionTokens / (genTimeMs / 1000)).toFixed(1)
+  return `${tps} tps`
+}

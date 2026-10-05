@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { RefreshCw, X, Zap } from 'lucide-svelte'
+  import { RefreshCw, X } from 'lucide-svelte'
   import Badge from '../../lib/ui/Badge.svelte'
   import Button from '../../lib/ui/Button.svelte'
   import Card from '../../lib/ui/Card.svelte'
   import { getIconPath } from '../connections/types'
-  import { cachedTokensFor, fmt, providerDisplayName, timeAgo, type RequestDetailItem } from './types'
+  import { cachedTokensFor, calculateTPS, fmt, formatDuration, providerDisplayName, timeAgo, type RequestDetailItem } from './types'
 
 interface Props {
   details?: RequestDetailItem[]
@@ -62,7 +62,7 @@ let {
             <th class="py-3 px-4">Provider</th>
             <th class="py-3 px-4">Model</th>
             <th class="py-3 px-4 text-right">TTFT</th>
-            <th class="py-3 px-4 text-right">Total Latency</th>
+            <th class="py-3 px-4 text-right">Duration</th>
             <th class="py-3 px-4 text-right">Prompt</th>
             <th class="py-3 px-4 text-right">Completion</th>
             <th class="py-3 px-4 text-right">Cached</th>
@@ -113,10 +113,10 @@ let {
                 </div>
               </td>
               <td class="py-3 px-4 text-right text-text-muted">
-                {item.latency?.ttft ? `${item.latency.ttft}ms` : '—'}
+                {item.latency?.ttft && item.latency.ttft > 0 ? formatDuration(item.latency.ttft) : '—'}
               </td>
-              <td class="py-3 px-4 text-right text-text-main font-medium">
-                {item.latency?.total ? `${item.latency.total}ms` : '—'}
+              <td class="py-3 px-4 text-right text-text-main font-medium" title={item.latency?.total ? `${item.latency.total}ms` : undefined}>
+                {formatDuration(item.latency?.total)}
               </td>
               <td class="py-3 px-4 text-right text-brand-500 whitespace-nowrap">
                 <div class="inline-flex items-center justify-end gap-1.5">
@@ -203,88 +203,104 @@ let {
 
       <!-- Modal Body -->
       <div class="flex-1 overflow-y-auto p-6 space-y-4 font-body text-xs">
-        <!-- Token Saver (RTK) Card -->
-        {#if selectedDetail.tokens?.saved_tokens && selectedDetail.tokens.saved_tokens > 0}
-          {@const origEst = selectedDetail.tokens.original_input_tokens ?? ((selectedDetail.tokens.prompt_tokens || 0) + (selectedDetail.tokens.saved_tokens || 0))}
-          {@const savedTokens = selectedDetail.tokens.saved_tokens || 0}
-          {@const compEst = selectedDetail.tokens.compressed_input_tokens ?? Math.max(0, origEst - savedTokens)}
-          {@const savedPct = selectedDetail.tokens.saved_percent ?? (origEst > 0 ? Math.round((savedTokens / origEst) * 100) : 0)}
-          <div class="p-4 rounded-xl bg-gradient-to-r from-success/15 via-success/10 to-surface-2 border border-success/30 space-y-2.5">
-            <div class="flex items-center justify-between flex-wrap gap-2">
-              <div class="flex items-center gap-2">
-                <div class="w-6 h-6 rounded-lg bg-success/20 flex items-center justify-center text-success">
-                  <Zap class="w-3.5 h-3.5" />
-                </div>
-                <div class="flex items-center gap-1.5">
-                  <span class="font-headline font-bold text-xs text-text-main">Token Saver Optimization</span>
-                  <Badge variant="success" size="sm" class="font-semibold px-2">
-                    -{fmt(savedTokens)} tokens ({savedPct}% saved)
-                  </Badge>
-                </div>
-              </div>
-              <div class="font-code text-[11px] text-text-muted bg-surface/60 px-2.5 py-1 rounded-lg border border-border/50">
-                Est: <span class="text-text-main font-medium">{fmt(origEst)}</span> → <span class="font-bold text-success">{fmt(compEst)}</span>
-              </div>
-            </div>
-
-            <!-- Detailed breakdown pills -->
-            <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1 border-t border-success/15 font-code text-[11px]">
-              <div class="bg-surface/50 p-2 rounded-lg border border-border/40">
-                <span class="text-text-muted text-[10px] block font-sans">Pre-Compression (Est)</span>
-                <span class="text-text-main font-bold">{fmt(origEst)} tokens</span>
-              </div>
-              <div class="bg-surface/50 p-2 rounded-lg border border-border/40">
-                <span class="text-text-muted text-[10px] block font-sans">Post-RTK (Est)</span>
-                <span class="text-success font-bold">{fmt(compEst)} tokens</span>
-                <span class="text-[10px] text-success/80 block font-sans">-{fmt(savedTokens)} pruned</span>
-              </div>
-              <div class="bg-surface/50 p-2 rounded-lg border border-border/40 col-span-2 sm:col-span-1">
-                <span class="text-text-muted text-[10px] block font-sans">Billed Input (Upstream)</span>
-                <span class="text-brand-500 font-bold">{fmt(selectedDetail.tokens.prompt_tokens)} tokens</span>
-                {#if cachedTokensFor(selectedDetail) > 0}
-                  <span class="text-[10px] text-info block font-sans">{fmt(cachedTokensFor(selectedDetail))} cached</span>
-                {/if}
-              </div>
-            </div>
-          </div>
-        {/if}
-
-        <!-- Metadata Row / Tokens Grid -->
+        <!-- Top Metrics / Execution Summary (OmniRoute style) -->
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div class="p-3 rounded-lg bg-surface-2 border border-border">
-            <div class="text-text-muted text-[10px] uppercase font-bold">Latency</div>
-            <div class="font-code text-sm font-bold text-text-main mt-1">
-              {selectedDetail.latency?.total ? `${selectedDetail.latency.total}ms` : '—'}
+            <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Duration</div>
+            <div class="font-code text-sm font-bold text-text-main mt-1" title={selectedDetail.latency?.total ? `${selectedDetail.latency.total}ms` : undefined}>
+              {formatDuration(selectedDetail.latency?.total)}
             </div>
           </div>
           <div class="p-3 rounded-lg bg-surface-2 border border-border">
-            <div class="text-text-muted text-[10px] uppercase font-bold">TTFT</div>
-            <div class="font-code text-sm font-bold text-text-main mt-1">
-              {selectedDetail.latency?.ttft && selectedDetail.latency.ttft > 0 ? `${selectedDetail.latency.ttft}ms` : '— (non-stream)'}
+            <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">TTFT</div>
+            <div class="font-code text-sm font-bold text-text-main mt-1" title={selectedDetail.latency?.ttft ? `${selectedDetail.latency.ttft}ms` : undefined}>
+              {selectedDetail.latency?.ttft && selectedDetail.latency.ttft > 0 ? formatDuration(selectedDetail.latency.ttft) : '— (non-stream)'}
             </div>
           </div>
           <div class="p-3 rounded-lg bg-surface-2 border border-border">
-            <div class="text-text-muted text-[10px] uppercase font-bold">Billed Input</div>
-            <div class="font-code text-sm font-bold text-brand-500 mt-1">
-              {fmt(selectedDetail.tokens?.prompt_tokens)}
+            <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Speed</div>
+            <div class="font-code text-sm font-bold text-emerald-500 mt-1">
+              {calculateTPS(selectedDetail.tokens?.completion_tokens, selectedDetail.latency?.total, selectedDetail.latency?.ttft) || '—'}
             </div>
           </div>
           <div class="p-3 rounded-lg bg-surface-2 border border-border">
-            <div class="text-text-muted text-[10px] uppercase font-bold">Total Output</div>
-            <div class="font-code text-sm font-bold text-success mt-1">
-              {fmt(selectedDetail.tokens?.completion_tokens)}
+            <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Status</div>
+            <div class="font-code text-sm font-bold {selectedDetail.status === 'success' || selectedDetail.status === 'ok' ? 'text-success' : 'text-error'} mt-1">
+              {selectedDetail.status === 'success' || selectedDetail.status === 'ok' ? '200 OK' : (selectedDetail.status || 'Error')}
             </div>
           </div>
-          <div class="p-3 rounded-lg bg-surface-2 border border-border col-span-1 sm:col-span-2">
-            <div class="text-text-muted text-[10px] uppercase font-bold">Cached Tokens</div>
-            <div class="font-code text-sm font-bold text-info mt-1">
-              {fmt(cachedTokensFor(selectedDetail))}
+        </div>
+
+        {@const promptTokens = selectedDetail.tokens?.prompt_tokens ?? 0}
+        {@const cacheRead = cachedTokensFor(selectedDetail)}
+        {@const savedTokens = selectedDetail.tokens?.saved_tokens ?? 0}
+        {@const fromTokens = savedTokens > 0 ? (promptTokens + savedTokens) : promptTokens}
+        {@const savedPct = fromTokens > 0 ? Math.round((savedTokens / fromTokens) * 100) : 0}
+
+        <!-- Token Group: Input (OmniRoute style) -->
+        <div class="p-3.5 rounded-xl bg-surface-2/60 border border-border space-y-1.5">
+          <div class="text-[10px] text-text-muted uppercase font-bold tracking-wider">
+            Input
+          </div>
+          <div class="flex flex-wrap items-center gap-1.5 font-code">
+            <span class="px-2 py-0.5 rounded bg-brand-500/20 text-brand-500 text-xs font-bold">
+              Total In: {fmt(promptTokens)}
+            </span>
+            <span class="px-2 py-0.5 rounded bg-sky-500/20 text-sky-700 dark:text-sky-400 text-xs font-bold">
+              Cache Read: {cacheRead > 0 ? fmt(cacheRead) : '0'}
+              {#if promptTokens > 0 && cacheRead > 0}
+                <span class="font-normal opacity-85 font-sans text-[11px]">({Math.min(100, Math.round((cacheRead / promptTokens) * 100))}%)</span>
+              {/if}
+            </span>
+            <span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-400 text-xs font-bold">
+              Cache Write: {selectedDetail.tokens?.cache_creation_input_tokens ? fmt(selectedDetail.tokens.cache_creation_input_tokens) : 'N/A'}
+            </span>
+            {#if savedTokens > 0}
+              <span class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-700 dark:text-purple-300 text-xs font-bold">
+                Compressed: {fmt(fromTokens)} → {fmt(promptTokens)} ({savedPct}% saved)
+              </span>
+            {/if}
+          </div>
+        </div>
+
+        {@const compTokens = selectedDetail.tokens?.completion_tokens ?? 0}
+        {@const reasoningTokens = selectedDetail.tokens?.reasoning_tokens ?? 0}
+
+        <!-- Token Group: Output (OmniRoute style) -->
+        <div class="p-3.5 rounded-xl bg-surface-2/60 border border-border space-y-1.5">
+          <div class="text-[10px] text-text-muted uppercase font-bold tracking-wider">
+            Output
+          </div>
+          <div class="flex flex-wrap items-center gap-1.5 font-code">
+            <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-xs font-bold">
+              Total Out: {fmt(compTokens)}
+            </span>
+            {#if reasoningTokens > 0}
+              <span class="px-2 py-0.5 rounded bg-violet-500/20 text-violet-700 dark:text-violet-400 text-xs font-bold">
+                Reasoning: {fmt(reasoningTokens)}
+              </span>
+            {/if}
+          </div>
+        </div>
+
+        <!-- Request Metadata -->
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1">
+          <div class="p-2.5 rounded-lg bg-surface-2 border border-border space-y-1">
+            <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Time</div>
+            <div class="font-code text-xs text-text-main truncate">
+              {timeAgo(selectedDetail.timestamp)}
             </div>
           </div>
-          <div class="p-3 rounded-lg bg-surface-2 border border-border col-span-1 sm:col-span-2">
-            <div class="text-text-muted text-[10px] uppercase font-bold">Reasoning Tokens</div>
-            <div class="font-code text-sm font-bold {(selectedDetail.tokens?.reasoning_tokens || 0) > 0 ? 'text-warning' : 'text-text-muted'} mt-1">
-              {fmt(selectedDetail.tokens?.reasoning_tokens || 0)}
+          <div class="p-2.5 rounded-lg bg-surface-2 border border-border space-y-1">
+            <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Provider</div>
+            <div class="font-code text-xs text-text-main truncate">
+              {providerDisplayName(selectedDetail.provider, providerNodes)}
+            </div>
+          </div>
+          <div class="p-2.5 rounded-lg bg-surface-2 border border-border space-y-1 col-span-2 sm:col-span-1">
+            <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Request ID</div>
+            <div class="font-code text-xs text-text-muted truncate select-all" title={selectedDetail.id}>
+              {selectedDetail.id || '—'}
             </div>
           </div>
         </div>
