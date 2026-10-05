@@ -1111,7 +1111,7 @@
   }
 
   async function handleDeleteConnection(conn: ProviderConnection) {
-    if (!confirm(`Delete connection "${conn.name || conn.id}"? This cannot be undone.`)) return
+    if (!confirm(`Delete connection "${formatEmailLabel(conn.name || conn.id, $emailPrivacy)}"? This cannot be undone.`)) return
     try {
       await api.deleteConnection(conn.id)
       onRefresh()
@@ -1216,7 +1216,7 @@
   // Edit connection modal
   function openEditConnection(conn: ProviderConnection) {
     editingConnection = conn
-    editName = conn.name || ''
+    editName = formatEmailLabel(conn.name, $emailPrivacy) || ''
     editPriority = conn.priority ?? 1
     editSeededPriority = editPriority
     editTestStatus = null
@@ -1248,8 +1248,12 @@
     if (!editingConnection) return
     isSavingEdit = true
     try {
-      const payload: { name?: string; priority?: number } = {
-        name: editName.trim() || undefined
+      const payload: { name?: string; priority?: number } = {}
+      const trimmed = editName.trim()
+      const original = (editingConnection.name || '').trim()
+      const masked = formatEmailLabel(original, $emailPrivacy).trim()
+      if (trimmed !== original && trimmed !== masked) {
+        payload.name = trimmed || undefined
       }
       // Omit an untouched priority: a NULL-priority row has no number of its
       // own, so always sending the seeded 1 would rewrite a plain rename into

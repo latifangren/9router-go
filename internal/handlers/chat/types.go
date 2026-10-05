@@ -23,16 +23,17 @@ type comboStickyState struct {
 
 // ChatHandler handles /v1/chat/completions (OpenAI) and /v1/messages (Claude) endpoints.
 type ChatHandler struct {
-	Repo        *db.Repo
-	Client      *http.Client
-	TokenSaver  *shared.TokenSaverConfig
-	stickyMu            sync.Mutex
-	stickyState         map[string]*comboStickyState
-	oauthRefreshFlight  singleflight.Group
+	Repo               *db.Repo
+	Client             *http.Client
+	TokenSaver         *shared.TokenSaverConfig
+	stickyMu           sync.Mutex
+	stickyState        map[string]*comboStickyState
+	oauthRefreshFlight singleflight.Group
 }
 
 // Type aliases for shared types
 type ModelInfo = shared.ModelInfo
+
 // ProviderConnection is the stored connection row.
 type ProviderConnection = models.ProviderConnection
 type ConnectionData = shared.ConnectionData

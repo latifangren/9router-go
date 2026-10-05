@@ -369,7 +369,7 @@
 
   function openEditModal(conn: ProviderConnection) {
     editingConnection = conn
-    editName = conn.name || ''
+    editName = formatEmailLabel(conn.name, $emailPrivacy) || ''
     editPriority = conn.priority ?? 1
     editTestStatus = null
     editTestError = null
@@ -400,10 +400,16 @@
     if (!editingConnection) return
     isSavingEdit = true
     try {
-      await api.updateConnection(editingConnection.id, {
-        name: editName.trim(),
+      const trimmed = editName.trim()
+      const original = (editingConnection.name || '').trim()
+      const masked = formatEmailLabel(original, $emailPrivacy).trim()
+      const payload: { name?: string; priority?: number } = {
         priority: editPriority,
-      })
+      }
+      if (trimmed !== original && trimmed !== masked) {
+        payload.name = trimmed
+      }
+      await api.updateConnection(editingConnection.id, payload)
       editingConnection = null
       await fetchConnections(page)
     } catch (err) {
