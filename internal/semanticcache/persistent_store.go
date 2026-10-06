@@ -4,25 +4,61 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"time"
 )
 
 // PersistentLRUStore wraps an in-memory LRUStore with SQLite disk persistence.
 type PersistentLRUStore struct {
-	lru *LRUStore
-	db  *sql.DB
-	ttl time.Duration
+	lru         *LRUStore
+	db          *sql.DB
+	ttl         time.Duration
+	stopJanitor chan struct{}
+	closeOnce   sync.Once
 }
 
 // NewPersistentStore creates an LRUStore backed by SQLite disk persistence.
 func NewPersistentStore(db *sql.DB, maxEntries int, ttl time.Duration) *PersistentLRUStore {
 	store := &PersistentLRUStore{
-		lru: NewLRUStore(maxEntries, ttl),
-		db:  db,
-		ttl: ttl,
+		lru:         NewLRUStore(maxEntries, ttl),
+		db:          db,
+		ttl:         ttl,
+		stopJanitor: make(chan struct{}),
 	}
 	_ = store.Hydrate(context.Background())
+	if ttl > 0 {
+		store.startJanitor(1 * time.Hour)
+	}
 	return store
+}
+
+func (p *PersistentLRUStore) startJanitor(interval time.Duration) {
+	if interval <= 0 {
+		interval = 1 * time.Hour
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-p.stopJanitor:
+				return
+			case <-ticker.C:
+				if p.ttl > 0 {
+					_ = p.InvalidateOlderThan(context.Background(), p.ttl)
+				}
+			}
+		}
+	}()
+}
+
+// Close stops the background janitor cleanly.
+func (p *PersistentLRUStore) Close() {
+	p.closeOnce.Do(func() {
+		if p.stopJanitor != nil {
+			close(p.stopJanitor)
+		}
+	})
 }
 
 // Hydrate preloads unexpired entries from SQLite into the in-memory LRU cache.

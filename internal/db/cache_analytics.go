@@ -57,6 +57,13 @@ type CacheTrendPoint struct {
 const (
 	defaultAvgInputPricePerMillion = 3.0
 	defaultCacheSavingsDiscount    = 0.9
+	sqlCacheCreationTokensExpr = `CASE
+		WHEN tokens IS NOT NULL AND json_valid(tokens) AND CAST(COALESCE(json_extract(tokens, '$.cache_creation_input_tokens'), json_extract(tokens, '$.cache_creation_tokens'), 0) AS INTEGER) > 0
+		THEN CAST(COALESCE(json_extract(tokens, '$.cache_creation_input_tokens'), json_extract(tokens, '$.cache_creation_tokens'), 0) AS INTEGER)
+		WHEN tokens IS NOT NULL AND json_valid(tokens) AND promptTokens > CAST(COALESCE(json_extract(tokens, '$.cached_tokens'), json_extract(tokens, '$.cache_read_input_tokens'), 0) AS INTEGER)
+		     AND CAST(COALESCE(json_extract(tokens, '$.cached_tokens'), json_extract(tokens, '$.cache_read_input_tokens'), 0) AS INTEGER) > 0
+		THEN promptTokens - CAST(COALESCE(json_extract(tokens, '$.cached_tokens'), json_extract(tokens, '$.cache_read_input_tokens'), 0) AS INTEGER)
+		ELSE 0 END`
 )
 
 // GetPromptCacheMetrics aggregates prompt cache statistics from usageHistory.
@@ -78,9 +85,7 @@ SELECT
 	COALESCE(SUM(CASE WHEN tokens IS NOT NULL AND json_valid(tokens)
 		THEN CAST(COALESCE(json_extract(tokens, '$.cached_tokens'), json_extract(tokens, '$.cache_read_input_tokens'), 0) AS INTEGER)
 		ELSE 0 END), 0) as totalCachedTokens,
-	COALESCE(SUM(CASE WHEN tokens IS NOT NULL AND json_valid(tokens)
-		THEN CAST(COALESCE(json_extract(tokens, '$.cache_creation_input_tokens'), json_extract(tokens, '$.cache_creation_tokens'), 0) AS INTEGER)
-		ELSE 0 END), 0) as totalCacheCreationTokens
+	COALESCE(SUM(` + sqlCacheCreationTokensExpr + `), 0) as totalCacheCreationTokens
 FROM usageHistory`
 
 	var (
@@ -160,9 +165,7 @@ SELECT
 	COALESCE(SUM(CASE WHEN tokens IS NOT NULL AND json_valid(tokens)
 		THEN CAST(COALESCE(json_extract(tokens, '$.cached_tokens'), json_extract(tokens, '$.cache_read_input_tokens'), 0) AS INTEGER)
 		ELSE 0 END), 0) as cachedTokens,
-	COALESCE(SUM(CASE WHEN tokens IS NOT NULL AND json_valid(tokens)
-		THEN CAST(COALESCE(json_extract(tokens, '$.cache_creation_input_tokens'), json_extract(tokens, '$.cache_creation_tokens'), 0) AS INTEGER)
-		ELSE 0 END), 0) as cacheCreationTokens
+	COALESCE(SUM(` + sqlCacheCreationTokensExpr + `), 0) as cacheCreationTokens
 FROM usageHistory
 WHERE provider IS NOT NULL AND provider != ''
 GROUP BY provider`
@@ -218,9 +221,7 @@ SELECT
 	COALESCE(SUM(CASE WHEN tokens IS NOT NULL AND json_valid(tokens)
 		THEN CAST(COALESCE(json_extract(tokens, '$.cached_tokens'), json_extract(tokens, '$.cache_read_input_tokens'), 0) AS INTEGER)
 		ELSE 0 END), 0) as cachedTokens,
-	COALESCE(SUM(CASE WHEN tokens IS NOT NULL AND json_valid(tokens)
-		THEN CAST(COALESCE(json_extract(tokens, '$.cache_creation_input_tokens'), json_extract(tokens, '$.cache_creation_tokens'), 0) AS INTEGER)
-		ELSE 0 END), 0) as cacheCreationTokens
+	COALESCE(SUM(` + sqlCacheCreationTokensExpr + `), 0) as cacheCreationTokens
 FROM usageHistory
 WHERE model IS NOT NULL AND model != ''
 GROUP BY model`
@@ -283,9 +284,7 @@ SELECT
 	COALESCE(SUM(CASE WHEN tokens IS NOT NULL AND json_valid(tokens)
 		THEN CAST(COALESCE(json_extract(tokens, '$.cached_tokens'), json_extract(tokens, '$.cache_read_input_tokens'), 0) AS INTEGER)
 		ELSE 0 END), 0) as cachedTokens,
-	COALESCE(SUM(CASE WHEN tokens IS NOT NULL AND json_valid(tokens)
-		THEN CAST(COALESCE(json_extract(tokens, '$.cache_creation_input_tokens'), json_extract(tokens, '$.cache_creation_tokens'), 0) AS INTEGER)
-		ELSE 0 END), 0) as cacheCreationTokens
+	COALESCE(SUM(` + sqlCacheCreationTokensExpr + `), 0) as cacheCreationTokens
 FROM usageHistory
 WHERE timestamp >= ?
 GROUP BY bucket

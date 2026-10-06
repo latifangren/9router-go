@@ -112,3 +112,40 @@ func TestPersistentLRUStore_WriteThroughAndHydrate(t *testing.T) {
 		t.Errorf("after Clear(): len=%d, dbLen=%d, want 0", store2.Len(), store2.DBLen())
 	}
 }
+
+func TestPersistentLRUStore_Janitor(t *testing.T) {
+	db, cleanup := setupTestSQLite(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	ttl := 20 * time.Millisecond
+	store := &PersistentLRUStore{
+		lru:         NewLRUStore(10, ttl),
+		db:          db,
+		ttl:         ttl,
+		stopJanitor: make(chan struct{}),
+	}
+
+	// Insert entry that is already expired
+	oldEntry := Entry{
+		Key:          "expired-key",
+		Model:        "gpt-4o",
+		ResponseBody: []byte(`{}`),
+		ContentType:  "application/json",
+		StoredAt:     time.Now().Add(-50 * time.Millisecond),
+	}
+	if err := store.Put(ctx, "expired-key", oldEntry); err != nil {
+		t.Fatalf("put oldEntry: %v", err)
+	}
+
+	// Start janitor with 10ms interval
+	store.startJanitor(10 * time.Millisecond)
+	defer store.Close()
+
+	// Wait for janitor tick
+	time.Sleep(30 * time.Millisecond)
+
+	if store.DBLen() != 0 {
+		t.Errorf("expected janitor to prune expired DB entries, got %d", store.DBLen())
+	}
+}

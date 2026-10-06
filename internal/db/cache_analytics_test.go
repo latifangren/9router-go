@@ -104,8 +104,8 @@ func TestGetPromptCacheMetrics_WithData(t *testing.T) {
 	if metrics.TotalCachedTokens != 1000 {
 		t.Errorf("TotalCachedTokens = %d, want 1000", metrics.TotalCachedTokens)
 	}
-	if metrics.TotalCacheCreationTokens != 100 {
-		t.Errorf("TotalCacheCreationTokens = %d, want 100", metrics.TotalCacheCreationTokens)
+	if metrics.TotalCacheCreationTokens != 400 {
+		t.Errorf("TotalCacheCreationTokens = %d, want 400 (100 explicit + 300 fallback)", metrics.TotalCacheCreationTokens)
 	}
 	if metrics.TokensSaved != 1000 {
 		t.Errorf("TokensSaved = %d, want 1000", metrics.TokensSaved)
@@ -138,6 +138,15 @@ func TestGetPromptCacheMetrics_WithData(t *testing.T) {
 	}
 	if openaiStats.CachedTokens != 200 {
 		t.Errorf("openai CachedTokens = %d, want 200", openaiStats.CachedTokens)
+	}
+
+	// Check model breakdown
+	sonnetStats, ok := metrics.ByModel["claude-3-5-sonnet"]
+	if !ok {
+		t.Fatal("expected claude-3-5-sonnet in ByModel")
+	}
+	if sonnetStats.CachedTokens != 800 {
+		t.Errorf("claude-3-5-sonnet CachedTokens = %d, want 800", sonnetStats.CachedTokens)
 	}
 }
 

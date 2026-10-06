@@ -1,6 +1,12 @@
 # Changelog
 
 ## [Unreleased]
+
+### ⚡ Optimasi SQLite Indexes, Fallback Creation Tokens, & TTL Janitor Semantic Cache
+
+- **Composite Indexes**: Menambahkan indeks komposit di `internal/db/schema.go` (`idx_uh_ts_prov`, `idx_uh_ts_model`, `idx_ca_ts_prov`, `idx_ca_ts_model`) untuk mempercepat agregasi time-series dashboard secara signifikan.
+- **Fallback Creation Tokens**: Menambahkan formula fallback di `internal/db/cache_analytics.go` untuk menangkap token pembuatan prompt cache pada provider Antigravity/Gemini yang tidak mengirim key eksplisit (`cache_creation_input_tokens`).
+- **Background TTL Janitor**: Menambahkan ticker background berkala di `internal/semanticcache/persistent_store.go` untuk membersihkan entri kadaluarsa di RAM dan SQLite secara otomatis, mencegah database membengkak seiring waktu.
 ### 🧪 Rilis split dua channel: stabil & experimental — dipilah dari tag
 
 Selama ini `release.yml` memperlakukan semua tag `v*` sama: tag

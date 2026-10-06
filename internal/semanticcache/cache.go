@@ -271,6 +271,16 @@ func (c *Cache) Len() int {
 	return c.store.Len()
 }
 
+// Close releases background resources such as the persistence janitor.
+func (c *Cache) Close() {
+	if c == nil || c.store == nil {
+		return
+	}
+	if closer, ok := c.store.(interface{ Close() }); ok {
+		closer.Close()
+	}
+}
+
 func estimateTokens(body []byte) int64 {
 	if len(body) == 0 {
 		return 0

@@ -147,6 +147,8 @@ func coreSchema() []tableDef {
 				"CREATE INDEX IF NOT EXISTS idx_uh_provider ON usageHistory(provider)",
 				"CREATE INDEX IF NOT EXISTS idx_uh_model ON usageHistory(model)",
 				"CREATE INDEX IF NOT EXISTS idx_uh_conn ON usageHistory(connectionId)",
+				"CREATE INDEX IF NOT EXISTS idx_uh_ts_prov ON usageHistory(timestamp DESC, provider)",
+				"CREATE INDEX IF NOT EXISTS idx_uh_ts_model ON usageHistory(timestamp DESC, model)",
 			},
 		},
 		{
@@ -201,6 +203,8 @@ func coreSchema() []tableDef {
 				"CREATE INDEX IF NOT EXISTS idx_ca_model ON compressionAnalytics(model)",
 				"CREATE INDEX IF NOT EXISTS idx_ca_mode ON compressionAnalytics(mode)",
 				"CREATE INDEX IF NOT EXISTS idx_ca_req ON compressionAnalytics(requestId)",
+				"CREATE INDEX IF NOT EXISTS idx_ca_ts_prov ON compressionAnalytics(timestamp DESC, provider)",
+				"CREATE INDEX IF NOT EXISTS idx_ca_ts_model ON compressionAnalytics(timestamp DESC, model)",
 			},
 		},
 		{
