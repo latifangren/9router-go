@@ -5,6 +5,7 @@
     type CompressionAnalyticsSummary,
   } from '../api/client'
   import { notifications } from '../lib/notifications'
+  import { copyToClipboard } from '../lib/clipboard'
 
   type SinceOption = '24h' | '7d' | '30d' | 'all'
 
@@ -29,6 +30,46 @@
   function handleSinceChange(opt: SinceOption) {
     since = opt
     loadData()
+  }
+  function exportJSON() {
+    if (!stats) return
+    const blob = new Blob([JSON.stringify(stats, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `compression-analytics-${since}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    notifications.success('Exported JSON successfully')
+  }
+
+  function exportCSV() {
+    if (!stats) return
+    const lines = ['Category,Key,Requests,TokensSaved,AvgSavingsPct']
+    for (const m of modeList) {
+      lines.push(`Mode,${m.mode},${m.count},${m.tokensSaved},${m.avgSavingsPct}%`)
+    }
+    for (const p of providerList) {
+      lines.push(`Provider,${p.provider},${p.count},${p.tokensSaved},0%`)
+    }
+    for (const m of modelList) {
+      lines.push(`Model,${m.model},${m.count},${m.tokensSaved},${m.avgSavingsPct}%`)
+    }
+    if (stats.topSavers && stats.topSavers.length > 0) {
+      lines.push('')
+      lines.push('TopSavers,RequestID,Timestamp,Provider,Model,Mode,OriginalTokens,CompressedTokens,TokensSaved,SavingsPct,DurationMs,EstUSD')
+      for (const s of stats.topSavers) {
+        lines.push(`TopSaver,${s.requestId},${s.timestamp},${s.provider},${s.model},${s.mode},${s.originalTokens},${s.compressedTokens},${s.tokensSaved},${s.savingsPct}%,${s.durationMs}ms,$${s.estimatedUsd}`)
+      }
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `compression-analytics-${since}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+    notifications.success('Exported CSV successfully')
   }
 
   onMount(() => {
@@ -177,8 +218,31 @@
     </div>
   </div>
 
+      <!-- Export Buttons -->
+      <div class="flex items-center rounded-xl bg-surface-2 p-1 border border-border">
+        <button
+          type="button"
+          onclick={exportCSV}
+          class="rounded-lg px-2.5 py-1 text-xs font-medium text-text-muted hover:text-text-main transition-colors flex items-center gap-1"
+          title="Export CSV"
+        >
+          <span class="material-symbols-outlined text-[14px]">download</span>
+          CSV
+        </button>
+        <button
+          type="button"
+          onclick={exportJSON}
+          class="rounded-lg px-2.5 py-1 text-xs font-medium text-text-muted hover:text-text-main transition-colors flex items-center gap-1"
+          title="Export JSON"
+        >
+          <span class="material-symbols-outlined text-[14px]">data_object</span>
+          JSON
+        </button>
+      </div>
+
   <!-- Hero StatCards -->
-  <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+  <!-- Hero StatCards -->
+  <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-7">
     <!-- Total Requests -->
     <div class="rounded-2xl border border-border bg-surface p-4 shadow-sm flex flex-col justify-between">
       <div class="flex items-center justify-between text-text-muted">
@@ -265,6 +329,22 @@
       </div>
     </div>
   </div>
+
+    <!-- ROI Speed -->
+    <div class="rounded-2xl border border-border bg-surface p-4 shadow-sm flex flex-col justify-between col-span-2 sm:col-span-1">
+      <div class="flex items-center justify-between text-text-muted">
+        <span class="text-xs font-medium uppercase tracking-wider">ROI Speed</span>
+        <span class="material-symbols-outlined text-[20px] text-emerald-400">bolt</span>
+      </div>
+      <div class="mt-3">
+        <div class="text-2xl font-bold text-emerald-500">
+          {(stats?.roiTokensPerMs ?? 0).toLocaleString()} <span class="text-xs font-normal text-text-muted">tok/ms</span>
+        </div>
+        <p class="text-xs text-text-subtle mt-1 truncate">
+          ~{Math.round((stats?.roiTokensPerMs ?? 0) * 1000).toLocaleString()} tokens/sec
+        </p>
+      </div>
+    </div>
 
   <!-- Hourly Trend Chart -->
   <div class="rounded-2xl border border-border bg-surface p-5 shadow-sm">
@@ -439,6 +519,93 @@
         </div>
       {/if}
     </div>
+  </div>
+
+  <!-- Top 10 Biggest Savers Table -->
+  <div class="rounded-2xl border border-border bg-surface p-5 shadow-sm space-y-4">
+    <div class="flex items-center justify-between">
+      <div>
+        <h3 class="text-sm font-semibold text-text-main flex items-center gap-1.5">
+          <span class="material-symbols-outlined text-[18px] text-brand-500">trophy</span>
+          Top 10 Biggest Token Savers
+        </h3>
+        <p class="text-xs text-text-subtle">Individual requests with the highest prompt token reduction.</p>
+      </div>
+      <span class="rounded-full bg-surface-2 px-2.5 py-1 text-xs font-semibold text-text-muted">
+        {stats?.topSavers?.length ?? 0} request(s)
+      </span>
+    </div>
+
+    {#if !stats?.topSavers || stats.topSavers.length === 0}
+      <div class="py-8 text-center text-xs text-text-subtle">
+        No recorded top compression runs yet.
+      </div>
+    {:else}
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead>
+            <tr class="border-b border-border text-text-muted">
+              <th class="py-2.5 px-3 font-semibold">Request ID</th>
+              <th class="py-2.5 px-3 font-semibold">Timestamp</th>
+              <th class="py-2.5 px-3 font-semibold">Provider / Model</th>
+              <th class="py-2.5 px-3 font-semibold">Mode</th>
+              <th class="py-2.5 px-3 font-semibold text-right">Original &rarr; Compressed</th>
+              <th class="py-2.5 px-3 font-semibold text-right">Tokens Saved</th>
+              <th class="py-2.5 px-3 font-semibold text-right">Savings %</th>
+              <th class="py-2.5 px-3 font-semibold text-right">Overhead</th>
+              <th class="py-2.5 px-3 font-semibold text-right">Est. USD</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border-subtle">
+            {#each stats.topSavers as s (s.requestId || s.timestamp)}
+              <tr class="hover:bg-surface-2/60 transition-colors">
+                <td class="py-2.5 px-3 font-mono text-[11px] text-text-main">
+                  <div class="flex items-center gap-1.5 max-w-[140px]">
+                    <span class="truncate" title={s.requestId || '-'}>{s.requestId || '-'}</span>
+                    {#if s.requestId}
+                      <button
+                        type="button"
+                        onclick={() => copyToClipboard(s.requestId)}
+                        class="text-text-subtle hover:text-text-main shrink-0"
+                        title="Copy Request ID"
+                      >
+                        <span class="material-symbols-outlined text-[13px]">content_copy</span>
+                      </button>
+                    {/if}
+                  </div>
+                </td>
+                <td class="py-2.5 px-3 text-text-subtle whitespace-nowrap">
+                  {s.timestamp ? s.timestamp.slice(0, 16).replace('T', ' ') : '-'}
+                </td>
+                <td class="py-2.5 px-3 text-text-muted">
+                  <span class="font-medium text-text-main">{s.provider}</span> / <span class="font-mono text-[11px]">{s.model}</span>
+                </td>
+                <td class="py-2.5 px-3">
+                  <span class="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] font-mono font-semibold uppercase text-brand-500">
+                    {s.mode}
+                  </span>
+                </td>
+                <td class="py-2.5 px-3 text-right font-mono text-text-muted">
+                  {s.originalTokens.toLocaleString()} &rarr; {s.compressedTokens.toLocaleString()}
+                </td>
+                <td class="py-2.5 px-3 text-right font-mono font-semibold text-cyan-400">
+                  {s.tokensSaved.toLocaleString()}
+                </td>
+                <td class="py-2.5 px-3 text-right font-medium text-emerald-500">
+                  {s.savingsPct}%
+                </td>
+                <td class="py-2.5 px-3 text-right text-purple-400 font-mono">
+                  {s.durationMs}ms
+                </td>
+                <td class="py-2.5 px-3 text-right font-medium text-emerald-400">
+                  ${s.estimatedUsd.toFixed(3)}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
   </div>
 
   <!-- Real Usage Receipts & Telemetry Details -->

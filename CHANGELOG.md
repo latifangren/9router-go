@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### 🏆 Top 10 Savers, ROI Speed Metric, & Tombol Export Report (CSV & JSON)
+
+- **Tabel Top 10 Savers**: Menambahkan query dan tabel interaktif "Top 10 Biggest Token Savers" di dashboard Compression Analytics untuk menginspeksi request spesifik paling hemat token (Request ID, provider, model, tokens saved, savings %, durasi, estimasi USD, dan tombol copy ID).
+- **Net ROI Efficiency Score**: Menambahkan metrik kecepatan pemangkasan token `roiTokensPerMs` (tokens saved per ms overhead kompresi) dan kartu visual ROI Speed di dashboard Compression Analytics.
+- **Tombol Export Report**: Menambahkan tombol download laporan instan format CSV dan JSON pada dashboard Cache Analytics dan Compression Analytics.
+
 ### ⚡ Optimasi SQLite Indexes, Fallback Creation Tokens, & TTL Janitor Semantic Cache
 
 - **Composite Indexes**: Menambahkan indeks komposit di `internal/db/schema.go` (`idx_uh_ts_prov`, `idx_uh_ts_model`, `idx_ca_ts_prov`, `idx_ca_ts_model`) untuk mempercepat agregasi time-series dashboard secara signifikan.

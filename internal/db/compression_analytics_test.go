@@ -92,6 +92,17 @@ func TestCompressionAnalytics_InsertAndSummary(t *testing.T) {
 	if summary.RealUsage.PromptTokens != 950 {
 		t.Errorf("promptTokens = %d, want 950", summary.RealUsage.PromptTokens)
 	}
+
+	// Verify ROI and TopSavers
+	if summary.RoiTokensPerMs <= 0 {
+		t.Errorf("expected roiTokensPerMs > 0, got %f", summary.RoiTokensPerMs)
+	}
+	if len(summary.TopSavers) != 2 {
+		t.Fatalf("expected 2 topSavers, got %d", len(summary.TopSavers))
+	}
+	if summary.TopSavers[0].TokensSaved != 400 {
+		t.Errorf("topSavers[0].TokensSaved = %d, want 400", summary.TopSavers[0].TokensSaved)
+	}
 }
 
 func TestCompressionAnalytics_UsageHistoryBackfill(t *testing.T) {

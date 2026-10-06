@@ -118,6 +118,37 @@
     if (refreshTimer) clearInterval(refreshTimer)
   })
 
+  function exportJSON() {
+    if (!stats) return
+    const blob = new Blob([JSON.stringify(stats, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `cache-analytics-${trendHours}h.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    notifications.success('Exported JSON successfully')
+  }
+
+  function exportCSV() {
+    if (!stats) return
+    const lines = ['Category,Name,TotalRequests,CachedRequests,CachedTokens,CreationTokens,HitRate']
+    for (const p of providerRows) {
+      lines.push(`Provider,${p.name},${p.totalRequests},${p.cachedRequests},${p.cachedTokens},${p.cacheCreationTokens},${p.rate.toFixed(1)}%`)
+    }
+    for (const m of modelRows) {
+      lines.push(`Model,${m.name},${m.totalRequests},${m.cachedRequests},${m.cachedTokens},${m.cacheCreationTokens},${m.rate.toFixed(1)}%`)
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `cache-analytics-${trendHours}h.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+    notifications.success('Exported CSV successfully')
+  }
+
   $effect(() => {
     if (autoRefresh) {
       if (!refreshTimer) {
@@ -267,6 +298,28 @@
         <span class="material-symbols-outlined text-[16px] {loading ? 'animate-spin' : ''}">refresh</span>
         Refresh
       </button>
+      <!-- Export Buttons -->
+      <div class="flex items-center rounded-xl bg-surface-2 p-1 border border-border">
+        <button
+          type="button"
+          onclick={exportCSV}
+          class="rounded-lg px-2.5 py-1 text-xs font-medium text-text-muted hover:text-text-main transition-colors flex items-center gap-1"
+          title="Export CSV"
+        >
+          <span class="material-symbols-outlined text-[14px]">download</span>
+          CSV
+        </button>
+        <button
+          type="button"
+          onclick={exportJSON}
+          class="rounded-lg px-2.5 py-1 text-xs font-medium text-text-muted hover:text-text-main transition-colors flex items-center gap-1"
+          title="Export JSON"
+        >
+          <span class="material-symbols-outlined text-[14px]">data_object</span>
+          JSON
+        </button>
+      </div>
+
     </div>
   </div>
 

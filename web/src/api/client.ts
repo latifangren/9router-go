@@ -488,6 +488,20 @@ export interface CompressionRealUsage {
   bySource?: Record<string, number>
 }
 
+export interface CompressionTopSaver {
+  requestId: string
+  timestamp: string
+  provider: string
+  model: string
+  mode: string
+  originalTokens: number
+  compressedTokens: number
+  tokensSaved: number
+  savingsPct: number
+  durationMs: number
+  estimatedUsd: number
+}
+
 export interface CompressionAnalyticsSummary {
   totalRequests: number
   totalTokensSaved: number
@@ -501,6 +515,8 @@ export interface CompressionAnalyticsSummary {
   bySkipReason?: Record<string, number>
   validationFallbacks: number
   realUsage: CompressionRealUsage
+  roiTokensPerMs?: number
+  topSavers?: CompressionTopSaver[]
 }
 
 export function isAuthenticated(): boolean {

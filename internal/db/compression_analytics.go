@@ -39,6 +39,21 @@ type CompressionHourBucket struct {
 	TokensSaved int64  `json:"tokensSaved"`
 }
 
+// CompressionTopSaver represents a top compression run for inspection.
+type CompressionTopSaver struct {
+	RequestID        string  `json:"requestId"`
+	Timestamp        string  `json:"timestamp"`
+	Provider         string  `json:"provider"`
+	Model            string  `json:"model"`
+	Mode             string  `json:"mode"`
+	OriginalTokens   int64   `json:"originalTokens"`
+	CompressedTokens int64   `json:"compressedTokens"`
+	TokensSaved      int64   `json:"tokensSaved"`
+	SavingsPct       float64 `json:"savingsPct"`
+	DurationMs       int64   `json:"durationMs"`
+	EstimatedUsd     float64 `json:"estimatedUsd"`
+}
+
 // CompressionRealUsage aggregates upstream LLM token counts and dollar savings.
 type CompressionRealUsage struct {
 	RequestsWithReceipts int64            `json:"requestsWithReceipts"`
@@ -65,6 +80,8 @@ type CompressionAnalyticsSummary struct {
 	BySkipReason        map[string]int64                    `json:"bySkipReason,omitempty"`
 	ValidationFallbacks int64                               `json:"validationFallbacks"`
 	RealUsage           CompressionRealUsage                `json:"realUsage"`
+	RoiTokensPerMs      float64                             `json:"roiTokensPerMs"`
+	TopSavers           []CompressionTopSaver               `json:"topSavers"`
 }
 
 // CompressionAnalyticsRecord represents a single run to record in compressionAnalytics table.
@@ -147,6 +164,7 @@ func (r *Repo) GetCompressionAnalyticsSummary(ctx context.Context, since string)
 		RealUsage: CompressionRealUsage{
 			BySource: make(map[string]int64),
 		},
+		TopSavers:    make([]CompressionTopSaver, 0),
 	}
 
 	cutoff := ""
@@ -399,6 +417,56 @@ HAVING s > 0`, whereClause)
 		}
 	}
 
+	// Net ROI efficiency score (tokens saved per ms of compression duration)
+	if totalDur := summary.TotalRequests * summary.AvgDurationMs; totalDur > 0 {
+		summary.RoiTokensPerMs = math.Round((float64(summary.TotalTokensSaved)/float64(totalDur))*10) / 10
+	}
+
+	// Top 10 Biggest Savers
+	topQuery := fmt.Sprintf(`
+SELECT
+	COALESCE(requestId, '') as reqId,
+	COALESCE(timestamp, '') as ts,
+	COALESCE(provider, 'unknown') as prov,
+	COALESCE(model, 'unknown') as mdl,
+	COALESCE(mode, 'rtk') as md,
+	originalTokens,
+	compressedTokens,
+	tokensSaved,
+	CASE WHEN originalTokens > 0 THEN (tokensSaved * 100.0) / originalTokens ELSE 0 END as pct,
+	durationMs,
+	COALESCE(estimatedUsdSaved, 0) as usd
+FROM compressionAnalytics
+%s
+ORDER BY tokensSaved DESC
+LIMIT 10`, whereClause)
+
+	topRows, err := r.db.QueryContext(ctx, topQuery, args...)
+	if err == nil {
+		defer topRows.Close()
+		for topRows.Next() {
+			var saver CompressionTopSaver
+			var pct, usd sql.NullFloat64
+			if err := topRows.Scan(
+				&saver.RequestID,
+				&saver.Timestamp,
+				&saver.Provider,
+				&saver.Model,
+				&saver.Mode,
+				&saver.OriginalTokens,
+				&saver.CompressedTokens,
+				&saver.TokensSaved,
+				&pct,
+				&saver.DurationMs,
+				&usd,
+			); err == nil {
+				saver.SavingsPct = math.Round(pct.Float64)
+				saver.EstimatedUsd = math.Round(usd.Float64*100) / 100
+				summary.TopSavers = append(summary.TopSavers, saver)
+			}
+		}
+	}
+
 	return summary, nil
 }
 
@@ -499,6 +567,58 @@ ORDER BY hr ASC`
 	// Real Usage
 	summary.RealUsage.RequestsWithReceipts = summary.TotalRequests
 	summary.RealUsage.EstimatedUsdSaved = math.Round((float64(summary.TotalTokensSaved)/1_000_000.0)*3.0*100) / 100
+
+	if totalDur := summary.TotalRequests * summary.AvgDurationMs; totalDur > 0 {
+		summary.RoiTokensPerMs = math.Round((float64(summary.TotalTokensSaved)/float64(totalDur))*10) / 10
+	}
+
+	// Backfill Top Savers from usageHistory
+	uhTopQuery := fmt.Sprintf(`
+SELECT
+	COALESCE(id, '') as reqId,
+	COALESCE(timestamp, '') as ts,
+	COALESCE(provider, 'unknown') as prov,
+	COALESCE(model, 'unknown') as mdl,
+	'rtk' as md,
+	CAST(COALESCE(json_extract(tokens, '$.original_input_tokens'), promptTokens) AS INTEGER) as origTok,
+	CAST(COALESCE(json_extract(tokens, '$.compressed_input_tokens'), promptTokens) AS INTEGER) as compTok,
+	CAST(COALESCE(json_extract(tokens, '$.saved_tokens'), 0) AS INTEGER) as savedTok,
+	CAST(COALESCE(json_extract(tokens, '$.saved_percent'), 0) AS REAL) as pct,
+	25 as durMs
+FROM usageHistory
+%s
+ORDER BY savedTok DESC
+LIMIT 10`, whereClause)
+
+	uhTopRows, err := r.db.QueryContext(ctx, uhTopQuery, args...)
+	if err == nil {
+		defer uhTopRows.Close()
+		for uhTopRows.Next() {
+			var saver CompressionTopSaver
+			var pct sql.NullFloat64
+			if err := uhTopRows.Scan(
+				&saver.RequestID,
+				&saver.Timestamp,
+				&saver.Provider,
+				&saver.Model,
+				&saver.Mode,
+				&saver.OriginalTokens,
+				&saver.CompressedTokens,
+				&saver.TokensSaved,
+				&pct,
+				&saver.DurationMs,
+			); err == nil {
+				saver.SavingsPct = math.Round(pct.Float64)
+				mp, _ := pricing.GetPricingForModel(saver.Provider, saver.Model)
+				rate := mp.InputPer1M
+				if rate <= 0 {
+					rate = defaultAvgInputPricePerMillion
+				}
+				saver.EstimatedUsd = math.Round((float64(saver.TokensSaved)/1_000_000.0)*rate*100) / 100
+				summary.TopSavers = append(summary.TopSavers, saver)
+			}
+		}
+	}
 
 	return summary, nil
 }
