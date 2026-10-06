@@ -73,6 +73,7 @@ func (h *ChatHandler) HandleChatCompletions(w http.ResponseWriter, r *http.Reque
 
 	ctx := handlerutil.WithSessionID(r.Context(), handlerutil.ExtractSessionID(r))
 	ctx = handlerutil.WithClientAnthropicBeta(ctx, r.Header.Get("anthropic-beta"))
+	ctx = translator.WithRequestedModel(ctx, stripModelContextMarker(reqBody.Model))
 
 	// Check prompt/response cache for non-streaming requests before model resolution
 	if !reqBody.Stream && h.SemanticCache != nil && h.SemanticCache.Enabled() {

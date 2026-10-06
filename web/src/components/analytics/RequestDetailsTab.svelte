@@ -11,6 +11,7 @@
     formatDuration,
     providerDisplayName,
     timeAgo,
+    formatLocalTimestamp,
     type RequestDetailItem,
   } from './types'
   import type { ProviderConnection } from '../../api/client'
@@ -271,7 +272,7 @@
 {#if selectedDetail}
   {@const acc = resolveAccount(selectedDetail)}
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-    <div class="w-full max-w-2xl max-h-[85vh] rounded-2xl bg-surface border border-border shadow-2xl flex flex-col overflow-hidden">
+    <div class="w-full max-w-4xl lg:max-w-5xl max-h-[90vh] rounded-2xl bg-surface border border-border shadow-2xl flex flex-col overflow-hidden">
       <!-- Modal Header -->
       <div class="px-6 py-4 border-b border-border flex items-center justify-between bg-surface-2">
         <div class="flex flex-wrap items-center gap-2">
@@ -324,7 +325,7 @@
           <div class="p-3 rounded-lg bg-surface-2 border border-border">
             <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Speed</div>
             <div class="font-code text-sm font-bold text-emerald-500 mt-1">
-              {calculateTPS(selectedDetail.tokens?.completion_tokens, selectedDetail.latency?.total, selectedDetail.latency?.ttft)}
+              {calculateTPS(selectedDetail.tokens?.completion_tokens, selectedDetail.latency?.total, selectedDetail.latency?.ttft) || '—'}
             </div>
           </div>
           <div class="p-3 rounded-lg bg-surface-2 border border-border">
@@ -391,60 +392,76 @@
         {/if}
 
         <!-- Routing & Account Details (OmniRoute style) -->
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
-          <div class="p-2.5 rounded-lg bg-surface-2 border border-border space-y-1">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-1">
+          <div class="p-3 rounded-xl bg-surface-2 border border-border space-y-1">
             <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Started At</div>
-            <div class="font-code text-xs text-text-main truncate" title={selectedDetail.startedAt || selectedDetail.timestamp}>
-              {selectedDetail.startedAt ? selectedDetail.startedAt.slice(0, 19).replace('T', ' ') : timeAgo(selectedDetail.timestamp)}
+            <div class="font-code text-xs text-text-main font-medium">
+              {formatLocalTimestamp(selectedDetail.startedAt || selectedDetail.timestamp)}
             </div>
           </div>
-          <div class="p-2.5 rounded-lg bg-surface-2 border border-border space-y-1">
+          <div class="p-3 rounded-xl bg-surface-2 border border-border space-y-1">
             <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Ended At</div>
-            <div class="font-code text-xs text-text-main truncate" title={selectedDetail.endedAt || '-'}>
-              {selectedDetail.endedAt ? selectedDetail.endedAt.slice(0, 19).replace('T', ' ') : '-'}
+            <div class="font-code text-xs text-text-main font-medium">
+              {formatLocalTimestamp(selectedDetail.endedAt)}
             </div>
           </div>
-          <div class="p-2.5 rounded-lg bg-surface-2 border border-border space-y-1">
+          <div class="p-3 rounded-xl bg-surface-2 border border-border space-y-1">
             <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Requested Model</div>
-            <div class="font-code text-xs text-text-main truncate" title={selectedDetail.requestedModel || selectedDetail.model}>
+            <div class="font-code text-xs text-text-main break-all font-medium">
               {selectedDetail.requestedModel || selectedDetail.model}
             </div>
           </div>
-          <div class="p-2.5 rounded-lg bg-surface-2 border border-border space-y-1">
+          <div class="p-3 rounded-xl bg-surface-2 border border-border space-y-1">
             <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Req Protocol</div>
-            <div class="font-code text-xs text-text-main truncate">
+            <div class="font-code text-xs text-text-main font-medium">
               {selectedDetail.protocol || 'OpenAI-Chat'}
             </div>
           </div>
-          <div class="p-2.5 rounded-lg bg-surface-2 border border-border space-y-1">
+          <div class="p-3 rounded-xl bg-surface-2 border border-border space-y-1">
             <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Cache Source</div>
-            <div class="font-code text-xs text-cyan-400 truncate">
+            <div class="font-code text-xs text-cyan-400 font-medium">
               {selectedDetail.cacheSource || (cachedTokensFor(selectedDetail) > 0 ? 'Upstream (Provider)' : 'None')}
             </div>
           </div>
-          <div class="p-2.5 rounded-lg bg-surface-2 border border-border space-y-1">
+          <div class="p-3 rounded-xl bg-surface-2 border border-border space-y-1">
             <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Account</div>
-            <div class="font-code text-xs text-text-main truncate" title={acc.name}>
-              {acc.name}
+            <div class="flex items-center justify-between gap-1">
+              <div class="font-code text-xs text-text-main break-all font-medium" title={acc.name}>
+                {acc.name}
+              </div>
+              <button
+                type="button"
+                onclick={() => copyToClipboard(acc.name)}
+                class="text-text-subtle hover:text-text-main p-0.5 rounded hover:bg-surface-3 transition-colors shrink-0"
+                title="Copy Account"
+              >
+                <span class="material-symbols-outlined text-[13px]">content_copy</span>
+              </button>
             </div>
           </div>
-          <div class="p-2.5 rounded-lg bg-surface-2 border border-border space-y-1">
+          <div class="p-3 rounded-xl bg-surface-2 border border-border space-y-1">
             <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">API Key</div>
-            <div class="font-code text-xs text-text-main truncate" title={selectedDetail.apiKey || 'Default'}>
+            <div class="font-code text-xs text-text-main break-all font-mono" title={selectedDetail.apiKey || 'Default'}>
               {selectedDetail.apiKey || 'Default'}
             </div>
           </div>
-          <div class="p-2.5 rounded-lg bg-surface-2 border border-border space-y-1">
+          <div class="p-3 rounded-xl bg-surface-2 border border-border space-y-1">
+            <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Combo</div>
+            <div class="font-code text-xs text-purple-400 font-mono font-medium">
+              {selectedDetail.combo || 'Direct (None)'}
+            </div>
+          </div>
+          <div class="p-3 rounded-xl bg-surface-2 border border-border space-y-1">
             <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Est. Cost</div>
             <div class="font-code text-xs text-emerald-500 font-bold">
               ${selectedDetail.cost ? selectedDetail.cost.toFixed(4) : '0.0000'}
             </div>
           </div>
           {#if selectedDetail.id}
-            <div class="p-2.5 rounded-lg bg-surface-2 border border-border space-y-1 col-span-2 sm:col-span-4">
+            <div class="p-3 rounded-xl bg-surface-2 border border-border space-y-1 col-span-1 sm:col-span-2 lg:col-span-3">
               <div class="text-text-muted text-[10px] uppercase font-bold tracking-wider">Request ID</div>
               <div class="font-code text-xs text-text-muted flex items-center justify-between gap-2" title={selectedDetail.id}>
-                <span class="truncate">{selectedDetail.id}</span>
+                <span class="break-all select-all">{selectedDetail.id}</span>
                 <button
                   type="button"
                   onclick={() => copyToClipboard(selectedDetail?.id || '')}
@@ -457,8 +474,6 @@
             </div>
           {/if}
         </div>
-
-        <!-- Raw JSON / Payload Viewer -->
         <div class="p-3.5 rounded-xl bg-surface-2/60 border border-border space-y-2">
           <div class="flex items-center justify-between text-[10px] uppercase font-bold text-text-muted tracking-wider">
             <span>Payload Inspection (JSON)</span>

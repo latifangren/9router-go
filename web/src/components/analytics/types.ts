@@ -199,3 +199,16 @@ export function calculateTPS(
   const tps = (completionTokens / (genTimeMs / 1000)).toFixed(1)
   return `${tps} tps`
 }
+
+export function formatLocalTimestamp(ts?: string | null): string {
+  if (!ts) return '—'
+  try {
+    const d = new Date(ts)
+    if (isNaN(d.getTime())) return ts
+    const dateStr = d.toLocaleDateString()
+    const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    return `${dateStr} ${timeStr}`
+  } catch {
+    return ts
+  }
+}
