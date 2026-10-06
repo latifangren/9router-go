@@ -81,10 +81,28 @@ func (h *ChatHandler) LogFailure(
 			responseContent = responseContent[:constants.MaxResponseContentLen] + "...[truncated]"
 		}
 	}
+	startedAt := info.StartedAt
+	if startedAt.IsZero() {
+		startedAt = now.Add(-time.Duration(latencyMs) * time.Millisecond)
+	}
+
 	reqData, marshalErr := json.Marshal(map[string]any{
-		"id": reqID, "provider": info.Provider, "model": info.Model,
-		"connectionId": info.ConnectionID, "status": "error",
-		"timestamp": now.Format("2006-01-02T15:04:05.000Z"),
+		"id":             reqID,
+		"provider":       info.Provider,
+		"model":          info.Model,
+		"requestedModel": info.RequestedModel,
+		"connectionId":   info.ConnectionID,
+		"connName":       info.ConnName,
+		"connEmail":      info.ConnEmail,
+		"account":        info.AccountLabel(),
+		"apiKey":         maskAPIKey(info.APIKey),
+		"combo":          info.ComboName,
+		"protocol":       info.Protocol,
+		"cacheSource":    info.CacheSource,
+		"status":         "error",
+		"timestamp":      now.Format("2006-01-02T15:04:05.000Z"),
+		"startedAt":      startedAt.Format("2006-01-02T15:04:05.000Z"),
+		"endedAt":        now.Format("2006-01-02T15:04:05.000Z"),
 		"latency": map[string]int64{
 			"ttft":  metricsTTFT(metrics),
 			"total": latencyMs,
@@ -234,17 +252,33 @@ func (h *ChatHandler) logUsage(info *UsageLogInfo, usage *translator.OpenAIUsage
 		tokensMap["saved_percent"] = info.SavedPercent
 	}
 
+	startedAtUsage := info.StartedAt
+	if startedAtUsage.IsZero() {
+		startedAtUsage = now.Add(-time.Duration(latencyMs) * time.Millisecond)
+	}
+
 	reqData, err := json.Marshal(map[string]any{
-		"id":           reqID,
-		"provider":     info.Provider,
-		"model":        info.Model,
-		"connectionId": info.ConnectionID,
-		"status":       "success",
-		"timestamp":    now.Format("2006-01-02T15:04:05.000Z"),
-		"latency":      map[string]int64{"ttft": ttftMs, "total": latencyMs},
-		"tokens":       tokensMap,
-		"request":      map[string]any{"messages": reqMsgs},
-		"response":     map[string]any{"content": respContent},
+		"id":             reqID,
+		"provider":       info.Provider,
+		"model":          info.Model,
+		"requestedModel": info.RequestedModel,
+		"connectionId":   info.ConnectionID,
+		"connName":       info.ConnName,
+		"connEmail":      info.ConnEmail,
+		"account":        info.AccountLabel(),
+		"apiKey":         maskAPIKey(info.APIKey),
+		"combo":          info.ComboName,
+		"protocol":       info.Protocol,
+		"cacheSource":    info.CacheSource,
+		"status":         "success",
+		"timestamp":      now.Format("2006-01-02T15:04:05.000Z"),
+		"startedAt":      startedAtUsage.Format("2006-01-02T15:04:05.000Z"),
+		"endedAt":        now.Format("2006-01-02T15:04:05.000Z"),
+		"latency":        map[string]int64{"ttft": ttftMs, "total": latencyMs},
+		"tokens":         tokensMap,
+		"cost":           cost,
+		"request":        map[string]any{"messages": reqMsgs},
+		"response":       map[string]any{"content": respContent},
 	})
 	if err != nil {
 		log.Error("usage", "marshal request detail failed", "error", err)

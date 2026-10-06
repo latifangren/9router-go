@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### 👤 Paritas Request Details Ala OmniRoute (Kolom Akun, Combo, Protokol, & Modal Detail)
+
+- **Backend Telemetri Akun**:
+  - `internal/handlers/chat/fallback.go` & `usage.go`: Mencatat metadata lengkap akun (`account`, `connName`, `connEmail`, `apiKey`, `combo`, `requestedModel`, `protocol`, `cacheSource`, `startedAt`, `endedAt`, `cost`) ke dalam JSON `requestDetails.data`.
+  - `internal/handlers/usage_stats.go`: Menambahkan fallback resolver otomatis pada `HandleRequestDetails` agar riwayat lama yang belum memiliki field akun otomatis terisi dari tabel `providerConnections`.
+- **Frontend Request Details Tab**:
+  - `web/src/components/analytics/RequestDetailsTab.svelte`:
+    - Menambahkan kolom **Account** di tabel utama dengan badge ikon akun/email developer.
+    - Menambahkan kolom **Cost ($)** di tabel.
+    - Menambahkan input filter/pencarian real-time (berdasarkan Model, Provider, Akun, atau ID).
+    - Memperbarui modal inspeksi request agar 100% identik dengan OmniRoute: badge Akun & Combo di header, rincian waktu (Started/Ended At), rincian Token Input (Total In, Cache Read %, Cache Write, Compressed RTK), Token Output (Total Out, Reasoning Tokens), serta rincian routing (Requested Model, Protocol, Cache Source, API Key, dan tombol copy Request ID).
+
 ### 🏆 Top 10 Savers, ROI Speed Metric, & Tombol Export Report (CSV & JSON)
 
 - **Tabel Top 10 Savers**: Menambahkan query dan tabel interaktif "Top 10 Biggest Token Savers" di dashboard Compression Analytics untuk menginspeksi request spesifik paling hemat token (Request ID, provider, model, tokens saved, savings %, durasi, estimasi USD, dan tombol copy ID).

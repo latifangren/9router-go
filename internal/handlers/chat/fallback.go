@@ -198,6 +198,10 @@ type forwardRequestParams struct {
 	W                 http.ResponseWriter
 	Provider          string
 	Model             string
+	RequestedModel    string
+	ComboName         string
+	Protocol          string
+	StartedAt         time.Time
 	ConnectionID      string
 	ConnName          string // human-readable account name, for logs
 	ConnEmail         string
@@ -207,7 +211,6 @@ type forwardRequestParams struct {
 	TranslateResponse bool
 	Endpoint          string
 }
-
 func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	ctx, w := f.Ctx, f.W
 	provider, model := f.Provider, f.Model
@@ -607,16 +610,37 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		if usage == nil {
 			usage = &translator.OpenAIUsage{}
 		}
+		reqModel := f.RequestedModel
+		if reqModel == "" {
+			reqModel = translator.RequestedModelFromContext(ctx)
+		}
+		if reqModel == "" {
+			reqModel = model
+		}
+		protocol := f.Protocol
+		if protocol == "" {
+			protocol = resolveProtocol(endpoint)
+		}
+		startedAt := f.StartedAt
+		if startedAt.IsZero() {
+			startedAt = time.Now().Add(-time.Duration(latencyMs) * time.Millisecond)
+		}
+
 		logInfo := &UsageLogInfo{
-			Provider:            provider,
-			Model:               model,
-			ConnectionID:        connectionID,
-			APIKey:              apiKey,
-			Endpoint:            endpoint,
-			Egress:              resolveEgress(connData, providerCfg).LogValue(),
-			OriginalInputTokens: origTokens,
-			SavedTokens:         savedTokens,
-			SavedPercent:        savedPct,
+			Provider:               provider,
+			Model:                  model,
+			RequestedModel:         reqModel,
+			ComboName:              f.ComboName,
+			Protocol:               protocol,
+			CacheSource:            resolveCacheSource(usage),
+			StartedAt:              startedAt,
+			ConnectionID:           connectionID,
+			APIKey:                 apiKey,
+			Endpoint:               endpoint,
+			Egress:                 resolveEgress(connData, providerCfg).LogValue(),
+			OriginalInputTokens:   origTokens,
+			SavedTokens:           savedTokens,
+			SavedPercent:          savedPct,
 			CompressionDurationMs: compressDurMs,
 		}
 		logInfo.ConnName, logInfo.ConnEmail = identityNames(h.connIdentityKVOr(f, connectionID))
@@ -638,18 +662,39 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	// request actually left through the pool.
 	identity = append(identity, "egress", resolveEgress(connData, providerCfg).LogValue())
 	connName, connEmail := identityNames(identity)
+	reqModel := f.RequestedModel
+	if reqModel == "" {
+		reqModel = translator.RequestedModelFromContext(ctx)
+	}
+	if reqModel == "" {
+		reqModel = model
+	}
+	protocol := f.Protocol
+	if protocol == "" {
+		protocol = resolveProtocol(endpoint)
+	}
+	startedAt := f.StartedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now().Add(-time.Duration(latencyMs) * time.Millisecond)
+	}
+
 	h.LogFailure(
 		&UsageLogInfo{
-			Provider:            provider,
-			Model:               model,
-			ConnectionID:        connectionID,
-			ConnName:            connName,
-			ConnEmail:           connEmail,
-			Endpoint:            endpoint,
-			Egress:              resolveEgress(connData, providerCfg).LogValue(),
-			OriginalInputTokens: origTokens,
-			SavedTokens:         savedTokens,
-			SavedPercent:        savedPct,
+			Provider:               provider,
+			Model:                  model,
+			RequestedModel:         reqModel,
+			ComboName:              f.ComboName,
+			Protocol:               protocol,
+			StartedAt:              startedAt,
+			ConnectionID:           connectionID,
+			ConnName:               connName,
+			ConnEmail:              connEmail,
+			APIKey:                 apiKey,
+			Endpoint:               endpoint,
+			Egress:                 resolveEgress(connData, providerCfg).LogValue(),
+			OriginalInputTokens:   origTokens,
+			SavedTokens:           savedTokens,
+			SavedPercent:          savedPct,
 			CompressionDurationMs: compressDurMs,
 		},
 		usage,
@@ -694,6 +739,9 @@ func isClientCanceled(ctx context.Context, err error) bool {
 // a role:"system" message is rejected by the Anthropic API.
 // false from compress/inject means nothing changed (or unparseable) — keep original, not a failure.
 func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) ([]byte, int, int, int) {
+	if h.TokenSaver == nil {
+		return body, 0, 0, 0
+	}
 	// Prompt-injection guard: tag (never block) flagged user content. Early
 	// detection here means operators can see abuse before it reaches upstream.
 	// Toggle via settings.injectionGuardEnabled (off bypasses the scan).
@@ -757,6 +805,23 @@ func (h *ChatHandler) applyTokenSavers(body []byte, claudeNative bool) ([]byte, 
 		}
 	}
 	return out, origTokens, savedTokens, savedPct
+}
+
+func resolveProtocol(endpoint string) string {
+	if endpoint == "/v1/messages" {
+		return "Claude-Messages"
+	}
+	if strings.Contains(endpoint, "gemini") {
+		return "Gemini"
+	}
+	return "OpenAI-Chat"
+}
+
+func resolveCacheSource(u *translator.OpenAIUsage) string {
+	if u != nil && (u.CachedTokens > 0 || (u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0)) {
+		return "Upstream (Provider)"
+	}
+	return "None"
 }
 
 // extractErrorText attempts to extract a human-readable error message from an upstream error JSON body.

@@ -546,6 +546,26 @@ func HandleRequestDetails(repo *db.Repo) http.HandlerFunc {
 					tokens["cached_tokens"] = float64(translator.CachedTokensFromJSON(rawTokens))
 				}
 			}
+			if _, ok := item["account"]; !ok {
+				connID, _ := item["connectionId"].(string)
+				connName, _ := item["connName"].(string)
+				connEmail, _ := item["connEmail"].(string)
+				if connEmail != "" {
+					item["account"] = connEmail
+				} else if connName != "" {
+					item["account"] = connName
+				} else if connID != "" {
+					item["account"] = connID
+				} else {
+					item["account"] = "Default"
+				}
+			}
+			if _, ok := item["protocol"]; !ok {
+				item["protocol"] = "OpenAI-Chat"
+			}
+			if _, ok := item["cacheSource"]; !ok {
+				item["cacheSource"] = "None"
+			}
 			details = append(details, item)
 		}
 

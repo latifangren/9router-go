@@ -44,8 +44,21 @@ export interface RequestDetailItem {
   id?: string
   status?: string
   timestamp?: string
+  startedAt?: string
+  endedAt?: string
   provider?: string
   model?: string
+  requestedModel?: string
+  connectionId?: string
+  connName?: string
+  connEmail?: string
+  account?: string
+  apiKey?: string
+  combo?: string
+  protocol?: string
+  cacheSource?: string
+  cost?: number
+  error?: string
   latency?: {
     total?: number
     ttft?: number
@@ -61,6 +74,14 @@ export interface RequestDetailItem {
     compressed_input_tokens?: number
     saved_tokens?: number
     saved_percent?: number
+  }
+  request?: {
+    messages?: Array<{ role?: string; content?: unknown }>
+  }
+  response?: {
+    content?: string
+    error?: string
+    status?: number
   }
   [key: string]: unknown
 }
