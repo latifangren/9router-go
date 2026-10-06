@@ -9,6 +9,99 @@
 - **Sensor Email & Masking Privasi**: Menambahkan utilitas masking privasi `web/src/lib/privacy.ts` serta tombol toggle sensor email di Quota Tracker, Provider Detail, dan Media view untuk menyamarkan alamat email akun saat screen sharing atau presentasi publik.
 - **Backend Test Coverage**: Peningkatan coverage di 8 paket backend (7 paket ≥85%: `config`, `codexquota`, `usagetracker`, `middleware`, `translator`, `handlerutil`, `proc`, dan `internal/app` 81.7%) untuk mengunci stabilitas sistem.
 
+### 🩹 Pembacaan usage yang gagal diam-diam dilaporkan sebagai nol — dashboard Usage & Analytics
+
+`GetUsageDailyRecent`, `GetUsageHistorySince`, `GetRecentUsageHistory`,
+`GetRequestDetailsPaged`, dan `ListProxyPools` mengiterasi cursor
+`database/sql` tanpa mengecek `rows.Err()`, dan error `rows.Scan()` di
+`continue`-kan. Cursor yang terpotong di tengah, atau baris yang nilainya tidak
+cocok dengan kolom hasil scan, hilang tanpa satu pun jejak — sementara pemanggil
+menerima list yang lebih pendek dengan `err == nil`.
+
+`HandleUsageStats` membaca ketiga sumber usage di balik `if err == nil { ... }`
+tanpa cabang `else`, jadi kegagalan baca apa pun — tabel hilang, file tak
+terbaca, error scan — menghasilkan HTTP 200 berisi `{"totalRequests":0,
+"totalCost":0, ...}`. Dashboard merender itu sebagai "tidak ada traffic pada
+periode ini", dan tidak ada log yang mencatat kesalahannya. Angka nol karena
+sistemnya rusak terlihat identik dengan angka nol karena memang sepi.
+
+Kelima reader kini mengembalikan error yang dibungkus `%w` plus `rows.Err()`,
+dan ketiga pemanggilan di `HandleUsageStats` menulis 500 dengan pesan asalnya.
+`GetRequestDetailsPaged` juga tidak lagi menelan kegagalan `COUNT(*)` menjadi
+`total: 0` — halaman yang berisi baris tetapi melaporkan nol termasuk kelas
+"nol yang berarti rusak" yang sama. Test regresi menutup kedua arah: baris yang
+tidak bisa discan harus menghasilkan error (sebelumnya list terpotong tanpa
+error), dan pembacaan sehat tetap mengagregasi seperti sebelumnya.
+
+Tiga penyesuaian dari review:
+
+1. **`ListProxyPools` tidak gagal pada `testStatus` NULL.** Kolom itu nullable
+   di skema bersama dan database yang sama ditulis dashboard Next.js, jadi
+   pool yang belum pernah diprobe wajar punya NULL. Memindainya sebagai
+   `string` biasa akan membuat seluruh tab Proxy Pools 500 karena satu baris
+   yang hanya belum punya status. Nilainya kini dibaca sebagai `""`; kegagalan
+   scan lain tetap fatal.
+2. **`GetRecentUsageHistory` di `usagetracker` dicatat.** Ring buffer memang
+   best-effort — pembacaan yang gagal membiarkannya kosong dan push berikutnya
+   mengisinya — tapi sekarang menulis `log.Warn`, karena ring kosong tanpa jejak
+   tidak bisa dibedakan dari instalasi baru.
+3. **`rows.Err()` dibungkus dengan konteks pemanggil**, konsisten dengan
+   error `rows.Scan()` di fungsi yang sama (§4.E).
+
+### 🧹 `repos.go` dipecah per tabel; resolusi strategi combo jadi satu helper
+
+`internal/db/repos.go` tumbuh jadi 647 LoC dan melewati batas keras 400 (§4.D).
+Isinya dipecah sesuai tabel yang diquery, supaya setiap file berada di bawah
+target 300 LoC: `apikeys.go` (apiKeys), `connections.go` (providerConnections),
+`providernodes.go` (providerNodes), `combos.go` (combos), dan `aliases.go` (scope
+`kv`: modelAliases, customModels). `repos.go` sendiri kini hanya memegang tipe
+`Repo` beserta daftarnya.
+
+Daftar kolom `providerConnections` yang diulang di tiga literal SELECT dan daftar
+kolom `providerNodes`/`combos` kini menjadi konstanta + satu fungsi scan per
+tabel, dipakai bersama oleh pembaca baris tunggal dan pembaca list, sehingga
+urutan kolom tidak bisa lagi melenceng di satu jalur saja. Empat cabang
+WHERE pada `GetProviderConnections` (provider × activeOnly) diratakan jadi satu
+`switch` alih-alih dua `if` bersarang.
+
+Resolusi strategi combo yang identik diulang tiga kali (`GetComboByName`,
+`GetComboById`, `GetCombos`) kini satu helper `resolveComboStrategy`. Perilaku
+tidak berubah: default `"fallback"`, override per combo menang atas setelan
+global, dan pembacaan setelan yang gagal membiarkan defaultnya tetap.
+
+**Verifikasi:** API package `db` tidak berubah — 100 signature `func`
+sebelum dan sesudah split identik (`go doc -all ./internal/db` di bandingkan
+sebelum/sesudah). `go build ./...` dan `go vet ./...` bersih, `go test ./...`
+hijau, `go test -tags=integration ./internal/integration/...` hijau (69,7s +
+0,2s).
+
+### 🔧 Backup dashboard kembali ke JSON yang dirapikan, seperti 9router upstream
+
+Latar (issue #160): tombol **Download Backup** di Settings menawarkan `.zip`
+berisi JSON. Upstream `9router` mengunduh JSON mentah — `JSON.stringify(payload,
+null, 2)` — dengan nama `9router-backup-<stamp>.json`, jadi backup di sini tidak
+bisa dibaca tanpa ekstrak dulu dan menyimpang dari parity.
+
+- `HandleExportDatabase` (`internal/handlers/dashboard/settings.go`) tidak lagi
+  membungkus payload ke arsip. Responsnya JSON dua-spasi lekukan
+  (`JSON.stringify(x, null, 2)`) dengan
+  `Content-Disposition: attachment; filename="9router-backup-<date>.json"`.
+  Cabang `?format=zip` dan deteksi `Accept: application/zip` dihapus karena
+  export kini hanya punya satu bentuk.
+- `handlerutil.WriteJSONIndented` (baru) menulis JSON berlekuk memakai
+  `jsontext.WithIndent("  ")` sambil tetap memakai `Deterministic(true)` yang
+  sudah dipakai seluruh respons dashboard.
+- `ProfileSettingsView.svelte` mengunduh `/api/settings/database` tanpa
+  `?format=zip`, menamai berkas `.json`, dan teks konfirmasinya menyebut
+  `(.json file)`.
+- **Import tetap menerima arsip `.zip` lama**: `HandleImportDatabase` masih
+  mendeteksi magic `PK\x03\x04` dan mengekstrak `*.json` di dalamnya, jadi
+  backup yang diunduh sebelum perubahan ini tetap bisa dipulihkan.
+- Test: `TestHandleExportDatabase_PrettyJSON` (Content-Type JSON, filename
+  `.json`, ada lekukan) menggantikan round-trip zip, dan
+  `TestHandleImportDatabase_LegacyZipArchive` memastikan import zip lama masih
+  bekerja.
+
 ### 🏷️ Provider kustom bisa memakai URL suffix sendiri — `openai-compatible-chat-<suffix>`, bukan `<uuid>`
 
 Latar (issue #155): setiap node OpenAI/Anthropic-compatible yang dibuat dari
@@ -111,6 +204,57 @@ modal tidak mengulang aturan yang sama.
 Upstream parity: `decolua/9router` `src/shared/components/EditConnectionModal.js`
 — label "Leave blank to keep the current API key.", tombol Check via
 `/api/providers/validate`, dan `testStatus` hanya di-set saat validasi sukses.
+
+### ♻️ `refactor(web): satu modal Edit Connection untuk Providers dan Quota Tracker` (issue #158)
+
+Modal Edit Connection sebelumnya ada dua salinan: inline di
+`ProviderDetailView.svelte` dan inline di `QuotaTrackerView.svelte`,
+masing-masing dengan sembilan variabel `edit*` sendiri.
+`checkReplacementKey()`, `resetKeyCheck()`, blok kolom API, dan struktur
+tombol Test/Save/Cancel-nya sama persis — jadi setiap aturan baru harus
+ditulis dua kali, dan PR #154 memang menulisnya dua kali.
+
+Keduanya sekarang memanggil `EditConnectionModal.svelte`, satu-satunya
+implementasi. Yang tersisa di tiap pemanggil cuma opening dan refresh:
+`onClose` menutup, `onSave` menulis lalu me-refresh. State `edit*`, probe, dan
+markup berpindah ke komponen itu.
+
+Tiga perbedaan yang dulu tersembunyi jadi satu perilaku. Semuanya memilih
+varian yang lebih aman, jadi ini refactor yang tidak sepenuhnya netral:
+
+- **Rename di Quota Tracker tidak lagi diam-diam menulis priority.** Modal itu
+  selalu mengirim `priority`, sehingga baris dengan `priority` NULL (yang
+  di-seed `1` di input) berubah jadi rank 1 hanya karena user mengganti nama —
+  bentrok dengan baris lain yang sudah memegang rank 1, dan resurrecting
+  pasangan yang tidak bisa di-reorder. Modal Providers sudah sejak awal memakai
+  `seededPriority` untuk mengabaikan priority yang tidak berubah; sekarang
+  keduanya.
+- **Kegagalan Save di Quota Tracker tidak lagi hilang diam-diam.** Errornya
+  hanya masuk `console.error`, jadi user menekan Save pada modal yang menolak
+  menutup tanpa penjelasan. Sekarang lewat `onSaveError`.
+
+  `onSaveError` sendiri sengaja dibuat **wajib** di `EditConnectionModal`,
+  bukan opsional. Sempat opsional, dan Quota Tracker melewatkannya — jadi
+  klaim "sudah diperbaiki" di atas benar secara harfiah dan salah secara
+  perilaku: error tetap hilang, dan ini bukan lagi sekadar soal `console`.
+  Wajib di tipe berarti pemanggil yang melewatkannya jadi error kompilasi,
+  bukan satu lagi bug senyap yang lolos review.
+
+- **Escape menutup modal.** `AddConnectionModal` dan delapan modal lain sudah
+  punya ini (parity `Modal` upstream); kedua salinan lama tidak. Sekarang
+  terpusat di satu tempat, jadi keyboard user tidak tersangkut di modal yang
+  tidak bisa ditutup tanpa mouse.
+- **`max="100"` pada input priority Quota Tracker dihapus.** Tidak ada batas
+  priority di backend maupun di modal Providers; batas itu hanya menahan form
+  di satu tempat dan tidak konsisten dengan tetangganya.
+
+Styling tombol Test disatukan ke paket ikon `science` milik Quota Tracker;
+label teksnya tetap berbeda (`Test` vs `Test Connection`) lewat prop
+`testLabel`, karena kedua halaman memang punya kebiasaan visual sendiri.
+
+Di luar scope, seperti di issue: `MediaProviderDetail.svelte` (modal edit
+koneksi media, tanpa key dan priority) dan `AddConnectionModal.svelte`.
+
 
 ## [v1.9.9] - 2026-10-05
 
