@@ -42,6 +42,7 @@
     type SuggestedModel
   } from './types'
   import { proxyBadgeInfo } from './proxyBadge'
+  import EditConnectionModal, { type ConnectionUpdate } from './EditConnectionModal.svelte'
   import AddConnectionModal from './AddConnectionModal.svelte'
   import AddCustomModelModal from './AddCustomModelModal.svelte'
   import ProviderHeaderOverridesModal from './ProviderHeaderOverridesModal.svelte'
@@ -515,19 +516,9 @@
     )
   })
 
+  // The connection whose Edit Connection modal is open; null when closed. The
+  // modal owns its own fields and payload (issue #158).
   let editingConnection = $state<ProviderConnection | null>(null)
-  let editName = $state('')
-  let editPriority = $state<number>(1)
-  // The value the priority field was seeded with. Saving sends priority only
-  // when the field actually changed: a NULL-priority row has no number of its
-  // own, so seeding the input with 1 and always sending it turned a plain
-  // rename into an assignment of rank 1, colliding with whichever row already
-  // held it.
-  let editSeededPriority = $state<number>(1)
-  let editTestStatus = $state<'ok' | 'error' | null>(null)
-  let editTestError = $state<string | null>(null)
-  let isTestingEdit = $state(false)
-  let isSavingEdit = $state(false)
 
   let showAddKeyModal = $state(false)
   let addConnectionError = $state('')
@@ -1216,59 +1207,17 @@
     )
   }
 
-  // Edit connection modal
+  // Edit connection modal. Every field, the probe and the payload live in
+  // EditConnectionModal; this only decides when it opens and who refreshes.
   function openEditConnection(conn: ProviderConnection) {
     editingConnection = conn
-    editName = conn.name || ''
-    editPriority = conn.priority ?? 1
-    editSeededPriority = editPriority
-    editTestStatus = null
-    editTestError = null
   }
 
-  async function testEditingConnection() {
+  async function saveEditingConnection(payload: ConnectionUpdate) {
     if (!editingConnection) return
-    isTestingEdit = true
-    editTestStatus = null
-    editTestError = null
-    try {
-      const res = await api.testConnection(editingConnection.id)
-      if (res?.valid) {
-        editTestStatus = 'ok'
-      } else {
-        editTestStatus = 'error'
-        editTestError = res?.error || 'Test failed'
-      }
-    } catch (err) {
-      editTestStatus = 'error'
-      editTestError = err instanceof Error ? err.message : 'Test failed'
-    } finally {
-      isTestingEdit = false
-    }
-  }
-
-  async function saveEditingConnection() {
-    if (!editingConnection) return
-    isSavingEdit = true
-    try {
-      const payload: { name?: string; priority?: number } = {
-        name: editName.trim() || undefined
-      }
-      // Omit an untouched priority: a NULL-priority row has no number of its
-      // own, so always sending the seeded 1 would rewrite a plain rename into
-      // a rank-1 assignment, tying with whoever already holds it and
-      // recreating the un-reorderable pair the reorder endpoint repairs.
-      if (editPriority !== editSeededPriority) {
-        payload.priority = editPriority
-      }
-      await api.updateConnection(editingConnection.id, payload)
-      editingConnection = null
-      onRefresh()
-    } catch (err) {
-      alert(`Failed to save connection: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      isSavingEdit = false
-    }
+    await api.updateConnection(editingConnection.id, payload)
+    editingConnection = null
+    onRefresh()
   }
 
   // Add Connection Button flow
@@ -4350,92 +4299,12 @@
 
 <!-- 4. Edit Connection Modal -->
 {#if editingConnection}
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-    <div
-      class="absolute inset-0 bg-black/50 backdrop-blur-[2px] fade-in"
-      onclick={() => (editingConnection = null)}
-      role="presentation"
-    ></div>
-    <div class="relative w-full bg-surface border border-border-subtle rounded-[14px] shadow-[var(--shadow-elev)] fade-in max-w-md p-6">
-      <div class="flex items-center justify-between pb-3 border-b border-border-subtle mb-4">
-        <h2 class="text-lg font-semibold text-text-main">Edit Connection</h2>
-        <button
-          type="button"
-          onclick={() => (editingConnection = null)}
-          class="p-1 rounded text-text-muted hover:text-text-main cursor-pointer"
-        >
-          <span class="material-symbols-outlined text-lg">close</span>
-        </button>
-      </div>
-
-      <div class="space-y-4">
-        <div>
-          <label class="block text-xs font-medium text-text-muted mb-1" for="edit-conn-name">Name</label>
-          <input
-            id="edit-conn-name"
-            bind:value={editName}
-            class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
-          />
-        </div>
-
-        {#if editingConnection.email}
-          <div>
-            <span class="block text-xs font-medium text-text-muted mb-1">Email</span>
-            <p class="text-xs text-text-main font-medium">{formatEmailLabel(editingConnection.email, $emailPrivacy)}</p>
-          </div>
-        {/if}
-
-        <div>
-          <label class="block text-xs font-medium text-text-muted mb-1" for="edit-conn-priority">Priority</label>
-          <input
-            id="edit-conn-priority"
-            type="number"
-            min="1"
-            bind:value={editPriority}
-            class="w-full px-2.5 py-1.5 text-xs border border-border rounded-md bg-background focus:outline-none focus:border-primary"
-          />
-        </div>
-
-        {#if editTestStatus}
-          <div class="text-xs {editTestStatus === 'ok' ? 'text-green-500' : 'text-red-500'}">
-            {editTestStatus === 'ok' ? 'Connection valid!' : editTestError || 'Test failed'}
-          </div>
-        {/if}
-
-        <div class="flex items-center justify-between pt-2">
-          <button
-            type="button"
-            onclick={testEditingConnection}
-            disabled={isTestingEdit}
-            class="px-3 py-1.5 text-xs font-semibold rounded-[8px] bg-surface-2 hover:bg-surface-3 text-text-main border border-border flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-          >
-            {#if isTestingEdit}
-              <span class="material-symbols-outlined text-sm animate-spin">progress_activity</span>
-            {/if}
-            Test Connection
-          </button>
-
-          <div class="flex gap-2">
-            <button
-              type="button"
-              onclick={() => (editingConnection = null)}
-              class="px-3 py-1.5 text-xs font-semibold rounded-[8px] bg-surface-2 hover:bg-surface-3 text-text-main border border-border cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onclick={saveEditingConnection}
-              disabled={isSavingEdit}
-              class="px-3 py-1.5 text-xs font-semibold rounded-[8px] bg-brand-500 hover:bg-brand-600 text-white shadow-sm disabled:opacity-50 cursor-pointer"
-            >
-              Save
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <EditConnectionModal
+    connection={editingConnection}
+    onClose={() => (editingConnection = null)}
+    onSave={saveEditingConnection}
+    onSaveError={(message) => alert(message)}
+  />
 {/if}
 
 <!-- 5. Add Custom Model Modal -->
