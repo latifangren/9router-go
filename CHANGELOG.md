@@ -9,6 +9,8 @@
   - `internal/db/compression_analytics.go`: Menambahkan fungsi `InsertCompressionAnalytics` dan agregator `GetCompressionAnalyticsSummary` (mendukung filter `since=24h|7d|30d|all`, rincian per mode, per provider, grafik per jam, dan fallback otomatis ke data historis `usageHistory`).
   - `internal/handlers/chat/usage.go`: Mencatat telemetri setiap eksekusi kompresi (mode, overhead latensi, token awal vs hasil kompresi, dan skip reason).
   - `internal/handlers/dashboard/compression_analytics.go`: Menambahkan REST API endpoint `GET /api/analytics/compression`.
+  - `internal/db/compression_analytics.go`: Menambahkan 1x migrasi idempotensi `BackfillCompressionAnalytics` yang mengekstrak riwayat dari `requestDetails` & `usageHistory`, dengan klasifikasi cerdas untuk mode `stacked` (RTK + Caveman/ADHD/Ponytail), `rtk`, `caveman`, `adhd`, dan `ponytail`.
+  - `internal/handlers/chat/usage.go`: Menambahkan fungsi `resolveCompressionMode` di live pipeline agar eksekusi kombinasi secara akurat dilabeli `stacked`.
 - **Frontend**:
   - `web/src/components/CompressionAnalyticsView.svelte`: UI Svelte 5 runes dengan 6 hero stat cards (Total Requests, Tokens Saved, Avg Savings %, Avg Duration, Receipts, Est. Cost Saved), filter rentang waktu, grafik trend per jam, serta progress bar rincian mode dan provider.
   - Integrasi tab `/dashboard/analytics/compression` di router SPA, `Sidebar.svelte`, dan `App.svelte`.

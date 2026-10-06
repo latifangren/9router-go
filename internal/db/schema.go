@@ -237,6 +237,9 @@ func EnsureCoreSchema(db *sql.DB) error {
 	); err != nil {
 		return fmt.Errorf("core schema: seed settings: %w", err)
 	}
+	if err := BackfillCompressionAnalytics(db); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -412,4 +413,175 @@ ORDER BY hr ASC`
 	summary.RealUsage.EstimatedUsdSaved = math.Round((float64(summary.TotalTokensSaved)/1_000_000.0)*3.0*100) / 100
 
 	return summary, nil
+}
+
+// BackfillCompressionAnalytics migrates historical compression telemetry from requestDetails
+// and usageHistory into compressionAnalytics if not already performed.
+func BackfillCompressionAnalytics(db *sql.DB) error {
+	if db == nil {
+		return nil
+	}
+
+	// 1. Check if migration already ran
+	var done string
+	err := db.QueryRow(`SELECT value FROM _meta WHERE key = 'migration_compression_backfill_done'`).Scan(&done)
+	if err == nil && done == "true" {
+		return nil
+	}
+
+	// 2. Query requestDetails with compression tokens
+	rdQuery := `
+SELECT
+	id,
+	timestamp,
+	provider,
+	data,
+	CAST(COALESCE(json_extract(data, '$.tokens.original_input_tokens'), 0) AS INTEGER) as origTokens,
+	CAST(COALESCE(json_extract(data, '$.tokens.compressed_input_tokens'), 0) AS INTEGER) as compTokens,
+	CAST(COALESCE(json_extract(data, '$.tokens.saved_tokens'), 0) AS INTEGER) as savedTokens,
+	CAST(COALESCE(json_extract(data, '$.latency.total'), 0) AS INTEGER) as durMs,
+	CAST(COALESCE(json_extract(data, '$.tokens.prompt_tokens'), 0) AS INTEGER) as promptTokens,
+	CAST(COALESCE(json_extract(data, '$.tokens.completion_tokens'), 0) AS INTEGER) as compTokens2,
+	CAST(COALESCE(json_extract(data, '$.tokens.cached_tokens'), 0) AS INTEGER) as cachedTokens,
+	CAST(COALESCE(json_extract(data, '$.tokens.cache_creation_input_tokens'), 0) AS INTEGER) as cacheWriteTokens
+FROM requestDetails
+WHERE data IS NOT NULL AND json_valid(data)
+  AND CAST(COALESCE(json_extract(data, '$.tokens.saved_tokens'), 0) AS INTEGER) > 0`
+
+	rows, err := db.Query(rdQuery)
+	if err == nil {
+		defer rows.Close()
+
+		insertStmt, prepErr := db.Prepare(`
+INSERT INTO compressionAnalytics (
+	timestamp, provider, mode, originalTokens, compressedTokens, tokensSaved,
+	durationMs, requestId, actualPromptTokens, actualCompletionTokens,
+	actualTotalTokens, actualCacheReadTokens, actualCacheWriteTokens, skipReason
+)
+SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ''
+WHERE NOT EXISTS (SELECT 1 FROM compressionAnalytics ca WHERE ca.requestId = ?)`)
+
+		if prepErr == nil {
+			defer insertStmt.Close()
+			for rows.Next() {
+				var (
+					id, ts, prov, data                          string
+					origTok, compTok, savedTok, durMs           int
+					promptTok, compTok2, cachedTok, cacheWrTok int
+				)
+				if scanErr := rows.Scan(
+					&id, &ts, &prov, &data,
+					&origTok, &compTok, &savedTok, &durMs,
+					&promptTok, &compTok2, &cachedTok, &cacheWrTok,
+				); scanErr == nil {
+					mode := classifyHistoricalMode(data, savedTok)
+					totalTok := promptTok + compTok2
+					_, _ = insertStmt.Exec(
+						ts, prov, mode, origTok, compTok, savedTok,
+						durMs, id, promptTok, compTok2,
+						totalTok, cachedTok, cacheWrTok,
+						id,
+					)
+				}
+			}
+		}
+	}
+
+	// 3. Fallback: also backfill from usageHistory for rows not covered by requestDetails
+	uhQuery := `
+SELECT
+	COALESCE(timestamp, ''),
+	COALESCE(provider, 'unknown'),
+	CAST(COALESCE(json_extract(tokens, '$.original_input_tokens'), promptTokens) AS INTEGER) as origTok,
+	CAST(COALESCE(json_extract(tokens, '$.compressed_input_tokens'), promptTokens) AS INTEGER) as compTok,
+	CAST(COALESCE(json_extract(tokens, '$.saved_tokens'), 0) AS INTEGER) as savedTok,
+	promptTokens,
+	completionTokens,
+	CAST(COALESCE(json_extract(tokens, '$.cached_tokens'), 0) AS INTEGER) as cachedTok,
+	CAST(COALESCE(json_extract(tokens, '$.cache_creation_input_tokens'), 0) AS INTEGER) as cacheWrTok
+FROM usageHistory
+WHERE tokens IS NOT NULL AND json_valid(tokens)
+  AND CAST(COALESCE(json_extract(tokens, '$.saved_tokens'), 0) AS INTEGER) > 0`
+
+	uhRows, err := db.Query(uhQuery)
+	if err == nil {
+		defer uhRows.Close()
+
+		uhInsertStmt, prepErr := db.Prepare(`
+INSERT INTO compressionAnalytics (
+	timestamp, provider, mode, originalTokens, compressedTokens, tokensSaved,
+	durationMs, requestId, actualPromptTokens, actualCompletionTokens,
+	actualTotalTokens, actualCacheReadTokens, actualCacheWriteTokens, skipReason
+)
+SELECT ?, ?, 'stacked', ?, ?, ?, 25, '', ?, ?, ?, ?, ?, ''
+WHERE NOT EXISTS (
+	SELECT 1 FROM compressionAnalytics ca
+	WHERE ca.timestamp = ? AND ca.provider = ? AND ca.tokensSaved = ?
+)`)
+
+		if prepErr == nil {
+			defer uhInsertStmt.Close()
+			for uhRows.Next() {
+				var (
+					ts, prov                                     string
+					origTok, compTok, savedTok                   int
+					promptTok, compTok2, cachedTok, cacheWrTok int
+				)
+				if scanErr := uhRows.Scan(
+					&ts, &prov,
+					&origTok, &compTok, &savedTok,
+					&promptTok, &compTok2, &cachedTok, &cacheWrTok,
+				); scanErr == nil {
+					totalTok := promptTok + compTok2
+					_, _ = uhInsertStmt.Exec(
+						ts, prov, origTok, compTok, savedTok,
+						promptTok, compTok2, totalTok, cachedTok, cacheWrTok,
+						ts, prov, savedTok,
+					)
+				}
+			}
+		}
+	}
+
+	// 4. Mark migration done in _meta
+	_, err = db.Exec(`INSERT OR REPLACE INTO _meta (key, value) VALUES ('migration_compression_backfill_done', 'true')`)
+	if err != nil {
+		return fmt.Errorf("BackfillCompressionAnalytics mark done: %w", err)
+	}
+
+	return nil
+}
+
+func classifyHistoricalMode(data string, savedTokens int) string {
+	hasCaveman := strings.Contains(data, "terse caveman") || strings.Contains(data, "Caveman")
+	hasADHD := strings.Contains(data, "ADHD") || strings.Contains(data, "action-first")
+	hasPonytail := strings.Contains(data, "ponytail") || strings.Contains(data, "Ponytail")
+
+	personaCount := 0
+	if hasCaveman {
+		personaCount++
+	}
+	if hasADHD {
+		personaCount++
+	}
+	if hasPonytail {
+		personaCount++
+	}
+
+	if (savedTokens > 0 && personaCount > 0) || personaCount > 1 {
+		return "stacked"
+	}
+	if savedTokens > 0 {
+		return "rtk"
+	}
+	if hasCaveman {
+		return "caveman"
+	}
+	if hasADHD {
+		return "adhd"
+	}
+	if hasPonytail {
+		return "ponytail"
+	}
+	return "rtk"
 }

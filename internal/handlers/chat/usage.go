@@ -12,6 +12,7 @@ import (
 
 	"9router/proxy/internal/constants"
 	"9router/proxy/internal/db"
+	"9router/proxy/internal/handlers/shared"
 
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
@@ -188,27 +189,24 @@ func (h *ChatHandler) logUsage(info *UsageLogInfo, usage *translator.OpenAIUsage
 		log.Error("usage", "insert failed", "error", err)
 	}
 
+	now := time.Now().UTC()
+	reqID := fmt.Sprintf("%d-%s", now.UnixMilli(), info.Model)
+
 	if h.Repo != nil && (info.SavedTokens > 0 || info.OriginalInputTokens > 0) {
-		mode := "rtk"
-		if h.TokenSaver != nil {
-			if h.TokenSaver.CavemanEnabled() {
-				mode = "caveman"
-			} else if h.TokenSaver.PonytailEnabled() {
-				mode = "ponytail"
-			}
-		}
+		mode := resolveCompressionMode(h.TokenSaver, info.SavedTokens)
 		skipReason := ""
 		if info.SavedTokens == 0 {
 			skipReason = "no_savings"
 		}
 		_ = h.Repo.InsertCompressionAnalytics(context.Background(), db.CompressionAnalyticsRecord{
-			Timestamp:              time.Now().UTC().Format(time.RFC3339),
+			Timestamp:              now.Format(time.RFC3339),
 			Provider:               info.Provider,
 			Mode:                   mode,
 			OriginalTokens:         info.OriginalInputTokens,
 			CompressedTokens:       info.OriginalInputTokens - info.SavedTokens,
 			TokensSaved:            info.SavedTokens,
 			DurationMs:             int(latencyMs),
+			RequestID:              reqID,
 			ActualPromptTokens:     usage.PromptTokens,
 			ActualCompletionTokens: usage.CompletionTokens,
 			ActualTotalTokens:      totalTokens,
@@ -217,9 +215,6 @@ func (h *ChatHandler) logUsage(info *UsageLogInfo, usage *translator.OpenAIUsage
 			SkipReason:             skipReason,
 		})
 	}
-
-	now := time.Now().UTC()
-	reqID := fmt.Sprintf("%d-%s", now.UnixMilli(), info.Model)
 	reqMsgs := extractRequestMessages(requestBody)
 
 	tokensMap := map[string]int{
@@ -490,4 +485,48 @@ func getJSONMap(m map[string]any, key string) map[string]any {
 // same mask from a stored row to recover the key's name.
 func maskAPIKey(key string) string {
 	return handlerutil.MaskAPIKey(key)
+}
+
+func resolveCompressionMode(ts *shared.TokenSaverConfig, savedTokens int) string {
+	hasRTK := savedTokens > 0
+	hasCaveman := false
+	hasPonytail := false
+	hasADHD := false
+
+	if ts != nil {
+		if ts.RTKEnabled() {
+			hasRTK = true
+		}
+		hasCaveman = ts.CavemanEnabled()
+		hasPonytail = ts.PonytailEnabled()
+		hasADHD = ts.ADHDEnabled()
+	}
+
+	personaCount := 0
+	if hasCaveman {
+		personaCount++
+	}
+	if hasPonytail {
+		personaCount++
+	}
+	if hasADHD {
+		personaCount++
+	}
+
+	if (hasRTK && personaCount > 0) || personaCount > 1 {
+		return "stacked"
+	}
+	if hasRTK {
+		return "rtk"
+	}
+	if hasCaveman {
+		return "caveman"
+	}
+	if hasADHD {
+		return "adhd"
+	}
+	if hasPonytail {
+		return "ponytail"
+	}
+	return "rtk"
 }
