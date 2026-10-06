@@ -41,7 +41,10 @@ func SetupRoutes(r interface {
 	mediaH := media.NewMediaHandler(repo, ts, chatH)
 	oauthH := oauth.NewOAuthHandler(repo)
 
-	dashH := dashboard.NewDashboardHandler(repo)
+	dashH := dashboard.NewDashboardHandler(repo, ts)
+	if chatH != nil {
+		dashH.SemanticCache = chatH.SemanticCache
+	}
 	// Chat & Models Domain (no version here: the four version GETs are
 	// public in SetupServerRouter, upstream PUBLIC_API_PATHS parity).
 	r.Get("/changelog", chatH.HandleChangelog)
@@ -411,7 +414,10 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) {
 	})
 	// Dashboard login session. status/login/logout/require-login are public so
 	// the login page can load before a cookie exists (upstream PUBLIC_API_PATHS).
-	dashH := dashboard.NewDashboardHandler(repo)
+	dashH := dashboard.NewDashboardHandler(repo, ts)
+	if versionH != nil {
+		dashH.SemanticCache = versionH.SemanticCache
+	}
 	r.Get("/api/auth/status", dashH.HandleAuthStatus)
 	r.Post("/api/auth/login", dashH.HandleAuthLogin)
 	r.Post("/api/auth/logout", dashH.HandleAuthLogout)
