@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"9router/proxy/internal/constants"
+	"9router/proxy/internal/db"
+
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/pricing"
@@ -183,6 +186,36 @@ func (h *ChatHandler) logUsage(info *UsageLogInfo, usage *translator.OpenAIUsage
 	tokensJSON := fmt.Sprintf(`{"prompt_tokens":%d,"completion_tokens":%d,"total_tokens":%d,"cached_tokens":%d,"cache_creation_input_tokens":%d}`, usage.PromptTokens, usage.CompletionTokens, totalTokens, cachedTokens, cacheCreationTokens)
 	if err := h.Repo.InsertUsageHistory(info.Provider, info.Model, info.ConnectionID, maskAPIKey(info.APIKey), info.Endpoint, usage.PromptTokens, usage.CompletionTokens, cost, "success", totalTokens, metaJSON, tokensJSON); err != nil {
 		log.Error("usage", "insert failed", "error", err)
+	}
+
+	if h.Repo != nil && (info.SavedTokens > 0 || info.OriginalInputTokens > 0) {
+		mode := "rtk"
+		if h.TokenSaver != nil {
+			if h.TokenSaver.CavemanEnabled() {
+				mode = "caveman"
+			} else if h.TokenSaver.PonytailEnabled() {
+				mode = "ponytail"
+			}
+		}
+		skipReason := ""
+		if info.SavedTokens == 0 {
+			skipReason = "no_savings"
+		}
+		_ = h.Repo.InsertCompressionAnalytics(context.Background(), db.CompressionAnalyticsRecord{
+			Timestamp:              time.Now().UTC().Format(time.RFC3339),
+			Provider:               info.Provider,
+			Mode:                   mode,
+			OriginalTokens:         info.OriginalInputTokens,
+			CompressedTokens:       info.OriginalInputTokens - info.SavedTokens,
+			TokensSaved:            info.SavedTokens,
+			DurationMs:             int(latencyMs),
+			ActualPromptTokens:     usage.PromptTokens,
+			ActualCompletionTokens: usage.CompletionTokens,
+			ActualTotalTokens:      totalTokens,
+			ActualCacheReadTokens:  cachedTokens,
+			ActualCacheWriteTokens: cacheCreationTokens,
+			SkipReason:             skipReason,
+		})
 	}
 
 	now := time.Now().UTC()

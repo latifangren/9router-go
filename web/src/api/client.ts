@@ -452,6 +452,49 @@ export interface CacheEntriesResponse {
   }
 }
 
+export interface CompressionModeStats {
+  count: number
+  tokensSaved: number
+  avgSavingsPct: number
+  skipped?: number
+}
+
+export interface CompressionProviderStats {
+  count: number
+  tokensSaved: number
+}
+
+export interface CompressionHourBucket {
+  hour: string
+  count: number
+  tokensSaved: number
+}
+
+export interface CompressionRealUsage {
+  requestsWithReceipts: number
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  estimatedUsdSaved: number
+  bySource?: Record<string, number>
+}
+
+export interface CompressionAnalyticsSummary {
+  totalRequests: number
+  totalTokensSaved: number
+  avgSavingsPct: number
+  avgDurationMs: number
+  byMode: Record<string, CompressionModeStats>
+  byProvider: Record<string, CompressionProviderStats>
+  last24h: CompressionHourBucket[]
+  totalSkipped?: number
+  bySkipReason?: Record<string, number>
+  validationFallbacks: number
+  realUsage: CompressionRealUsage
+}
+
 export function isAuthenticated(): boolean {
   if (typeof window === 'undefined') return false
   if (sessionStorage.getItem('9router_auth') === 'true' || localStorage.getItem('9router_auth') === 'true') {
@@ -1375,6 +1418,9 @@ export const api = {
       request<{ success: boolean }>(`/api/cache/entries?id=${encodeURIComponent(id)}`, {
         method: 'DELETE',
       }),
+    // Compression Analytics
+    getCompressionAnalytics: (since = '24h') =>
+      request<CompressionAnalyticsSummary>(`/api/analytics/compression?since=${since}`),
   logout: async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' })

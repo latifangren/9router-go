@@ -174,6 +174,32 @@ func coreSchema() []tableDef {
 				"CREATE INDEX IF NOT EXISTS idx_rd_conn ON requestDetails(connectionId)",
 			},
 		},
+		{
+			name: "compressionAnalytics",
+			columns: [][2]string{
+				{"id", "INTEGER PRIMARY KEY AUTOINCREMENT"},
+				{"timestamp", "TEXT NOT NULL"},
+				{"provider", "TEXT"},
+				{"mode", "TEXT NOT NULL"},
+				{"originalTokens", "INTEGER NOT NULL"},
+				{"compressedTokens", "INTEGER NOT NULL"},
+				{"tokensSaved", "INTEGER NOT NULL"},
+				{"durationMs", "INTEGER DEFAULT 0"},
+				{"requestId", "TEXT"},
+				{"actualPromptTokens", "INTEGER DEFAULT 0"},
+				{"actualCompletionTokens", "INTEGER DEFAULT 0"},
+				{"actualTotalTokens", "INTEGER DEFAULT 0"},
+				{"actualCacheReadTokens", "INTEGER DEFAULT 0"},
+				{"actualCacheWriteTokens", "INTEGER DEFAULT 0"},
+				{"skipReason", "TEXT"},
+			},
+			indexes: []string{
+				"CREATE INDEX IF NOT EXISTS idx_ca_ts ON compressionAnalytics(timestamp DESC)",
+				"CREATE INDEX IF NOT EXISTS idx_ca_provider ON compressionAnalytics(provider)",
+				"CREATE INDEX IF NOT EXISTS idx_ca_mode ON compressionAnalytics(mode)",
+				"CREATE INDEX IF NOT EXISTS idx_ca_req ON compressionAnalytics(requestId)",
+			},
+		},
 	}
 }
 

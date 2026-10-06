@@ -86,6 +86,7 @@
     { tab: 'quota' as ActiveTab, label: 'Quota Tracker', icon: 'data_usage' },
     { tab: 'token-saver' as ActiveTab, label: 'Token Saver', icon: 'savings' },
     { tab: 'cache' as ActiveTab, label: 'Cache Analytics', icon: 'cached' },
+    { tab: 'compression-analytics' as ActiveTab, label: 'Compression Analytics', icon: 'compress' },
     { tab: 'cli-tools' as ActiveTab, label: 'CLI Tools', icon: 'terminal' },
   ] as const
 

@@ -34,6 +34,7 @@
   import TerminalView from './components/TerminalView.svelte'
   import TokenSaverView from './components/TokenSaverView.svelte'
   import CacheAnalyticsView from './components/CacheAnalyticsView.svelte'
+  import CompressionAnalyticsView from './components/CompressionAnalyticsView.svelte'
   import TopBar from './components/TopBar.svelte'
   import { parseMediaProvider, parseProviderId, pathToTab, providerPath, mediaProviderPath, TAB_ROUTES, type ActiveTab, type MediaProviderRoute } from './lib/router'
   import { PROVIDER_CATALOG } from './lib/providers'
@@ -367,6 +368,8 @@
               <TokenSaverView {settings} onRefresh={loadData} />
             {:else if activeTab === 'cache'}
               <CacheAnalyticsView />
+            {:else if activeTab === 'compression-analytics'}
+              <CompressionAnalyticsView />
             {:else if activeTab === 'cli-tools'}
               <CliToolsView {apiKeys} onRefresh={loadData} />
             {:else if activeTab === 'keys'}

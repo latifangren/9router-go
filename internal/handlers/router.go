@@ -187,6 +187,9 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	r.Get("/api/cache/entries", dashH.HandleGetCacheEntries)
 	r.Delete("/api/cache/entries", dashH.HandleDeleteCacheEntry)
 
+	// Compression Analytics
+	r.Get("/api/analytics/compression", dashH.HandleGetCompressionAnalytics)
+
 	r.Get("/api/provider-nodes", dashH.HandleGetProviderNodes)
 	r.Post("/api/provider-nodes", dashH.HandleCreateProviderNode)
 	r.Put("/api/provider-nodes/{id}", dashH.HandleUpdateProviderNode)

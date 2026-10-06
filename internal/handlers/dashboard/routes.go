@@ -130,5 +130,8 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		r.Delete("/cache", h.HandleDeleteCache)
 		r.Get("/cache/entries", h.HandleGetCacheEntries)
 		r.Delete("/cache/entries", h.HandleDeleteCacheEntry)
+
+		// Compression Analytics
+		r.Get("/analytics/compression", h.HandleGetCompressionAnalytics)
 	})
 }
