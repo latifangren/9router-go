@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 🚀 Analytics Improvements: Model Breakdown, Dynamic Pricing, & Semantic Cache Persistence
+
+- **Durasi Kompresi Murni**: Memperbaiki pengukuran `CompressionDurationMs` di `internal/handlers/chat/fallback.go` yang sebelumnya salah mencatat total latensi streaming LLM (~7.5s) menjadi durasi murni eksekusi kompresi (~1–15ms).
+- **Model-Level Breakdown**: Menambahkan rincian per-model di backend (`ByModel`) dan frontend tabel `Breakdown by Model` untuk dashboard Cache dan Compression.
+- **Dynamic Pricing**: Menggantikan hardcode $3.0/M dengan kalkulasi harga riil per-model dari `internal/pricing` (`pricing.GetPricingForModel`).
+- **Persistensi SQLite Semantic Cache**: Menambahkan tabel `semanticCacheEntries` dan `PersistentLRUStore` di `internal/semanticcache/` sehingga cache tidak hilang saat container restart, lengkap dengan preloading/hydration otomatis saat boot.
+
 ### 📉 Compression Analytics Dashboard (port OmniRoute `/dashboard/analytics/compression`)
 
 - **Backend**:

@@ -139,9 +139,14 @@ func (c *Cache) Stats() Stats {
 		memEntries = c.store.Len()
 	}
 
+	dbEntries := 0
+	if ps, ok := c.store.(interface{ DBLen() int }); ok {
+		dbEntries = ps.DBLen()
+	}
+
 	return Stats{
 		MemoryEntries: memEntries,
-		DBEntries:     0,
+		DBEntries:     dbEntries,
 		Hits:          hits,
 		Misses:        misses,
 		HitRate:       hitRate,

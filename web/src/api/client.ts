@@ -407,6 +407,7 @@ export interface PromptCacheMetrics {
   tokensSaved: number
   estimatedCostSaved: number
   byProvider: Record<string, PromptCacheProviderStats>
+  byModel?: Record<string, PromptCacheProviderStats>
   lastUpdated: string
 }
 
@@ -464,6 +465,12 @@ export interface CompressionProviderStats {
   tokensSaved: number
 }
 
+export interface CompressionModelStats {
+  count: number
+  tokensSaved: number
+  avgSavingsPct: number
+}
+
 export interface CompressionHourBucket {
   hour: string
   count: number
@@ -488,6 +495,7 @@ export interface CompressionAnalyticsSummary {
   avgDurationMs: number
   byMode: Record<string, CompressionModeStats>
   byProvider: Record<string, CompressionProviderStats>
+  byModel?: Record<string, CompressionModelStats>
   last24h: CompressionHourBucket[]
   totalSkipped?: number
   bySkipReason?: Record<string, number>

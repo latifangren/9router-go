@@ -294,7 +294,12 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			claudeNative = true
 		}
 	}
+	compressStart := time.Now()
 	pipedBody, origTokens, savedTokens, savedPct := h.applyTokenSavers(body, claudeNative)
+	compressDurMs := int(time.Since(compressStart).Milliseconds())
+	if compressDurMs <= 0 {
+		compressDurMs = 1
+	}
 	var claudeToolMap map[string]string
 	if isAnthropic {
 		if !claudeNative {
@@ -440,6 +445,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 				OriginalInputTokens: origTokens,
 				SavedTokens:         savedTokens,
 				SavedPercent:        savedPct,
+				CompressionDurationMs: compressDurMs,
 			},
 			nil,
 			fwdErr,
@@ -611,6 +617,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			OriginalInputTokens: origTokens,
 			SavedTokens:         savedTokens,
 			SavedPercent:        savedPct,
+			CompressionDurationMs: compressDurMs,
 		}
 		logInfo.ConnName, logInfo.ConnEmail = identityNames(h.connIdentityKVOr(f, connectionID))
 		h.logUsage(logInfo, usage, latencyMs, body, metrics)
@@ -643,6 +650,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			OriginalInputTokens: origTokens,
 			SavedTokens:         savedTokens,
 			SavedPercent:        savedPct,
+			CompressionDurationMs: compressDurMs,
 		},
 		usage,
 		fwdErr,

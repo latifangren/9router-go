@@ -7,6 +7,8 @@ import (
 	"math"
 	"strings"
 	"time"
+
+	"9router/proxy/internal/pricing"
 )
 
 // CompressionModeStats holds per-mode compression statistics.
@@ -21,6 +23,13 @@ type CompressionModeStats struct {
 type CompressionProviderStats struct {
 	Count       int64 `json:"count"`
 	TokensSaved int64 `json:"tokensSaved"`
+}
+
+// CompressionModelStats holds per-model compression statistics.
+type CompressionModelStats struct {
+	Count         int64   `json:"count"`
+	TokensSaved   int64   `json:"tokensSaved"`
+	AvgSavingsPct float64 `json:"avgSavingsPct"`
 }
 
 // CompressionHourBucket represents an hourly time bucket for trend charts.
@@ -50,6 +59,7 @@ type CompressionAnalyticsSummary struct {
 	AvgDurationMs       int64                               `json:"avgDurationMs"`
 	ByMode              map[string]CompressionModeStats     `json:"byMode"`
 	ByProvider          map[string]CompressionProviderStats `json:"byProvider"`
+	ByModel             map[string]CompressionModelStats    `json:"byModel"`
 	Last24h             []CompressionHourBucket             `json:"last24h"`
 	TotalSkipped        int64                               `json:"totalSkipped"`
 	BySkipReason        map[string]int64                    `json:"bySkipReason,omitempty"`
@@ -61,6 +71,7 @@ type CompressionAnalyticsSummary struct {
 type CompressionAnalyticsRecord struct {
 	Timestamp              string
 	Provider               string
+	Model                  string
 	Mode                   string
 	OriginalTokens         int
 	CompressedTokens       int
@@ -72,6 +83,7 @@ type CompressionAnalyticsRecord struct {
 	ActualTotalTokens      int
 	ActualCacheReadTokens  int
 	ActualCacheWriteTokens int
+	EstimatedUsdSaved      float64
 	SkipReason             string
 }
 
@@ -84,16 +96,26 @@ func (r *Repo) InsertCompressionAnalytics(ctx context.Context, rec CompressionAn
 		rec.Mode = "rtk"
 	}
 
+	if rec.EstimatedUsdSaved <= 0 && rec.TokensSaved > 0 {
+		mp, _ := pricing.GetPricingForModel(rec.Provider, rec.Model)
+		rate := mp.InputPer1M
+		if rate <= 0 {
+			rate = defaultAvgInputPricePerMillion
+		}
+		rec.EstimatedUsdSaved = math.Round((float64(rec.TokensSaved)/1_000_000.0)*rate*100) / 100
+	}
+
 	query := `
 INSERT INTO compressionAnalytics (
-	timestamp, provider, mode, originalTokens, compressedTokens, tokensSaved,
+	timestamp, provider, model, mode, originalTokens, compressedTokens, tokensSaved,
 	durationMs, requestId, actualPromptTokens, actualCompletionTokens,
-	actualTotalTokens, actualCacheReadTokens, actualCacheWriteTokens, skipReason
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	actualTotalTokens, actualCacheReadTokens, actualCacheWriteTokens, estimatedUsdSaved, skipReason
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := r.db.ExecContext(ctx, query,
 		rec.Timestamp,
 		rec.Provider,
+		rec.Model,
 		rec.Mode,
 		rec.OriginalTokens,
 		rec.CompressedTokens,
@@ -105,6 +127,7 @@ INSERT INTO compressionAnalytics (
 		rec.ActualTotalTokens,
 		rec.ActualCacheReadTokens,
 		rec.ActualCacheWriteTokens,
+		rec.EstimatedUsdSaved,
 		rec.SkipReason,
 	)
 	if err != nil {
@@ -118,6 +141,7 @@ func (r *Repo) GetCompressionAnalyticsSummary(ctx context.Context, since string)
 	summary := &CompressionAnalyticsSummary{
 		ByMode:       make(map[string]CompressionModeStats),
 		ByProvider:   make(map[string]CompressionProviderStats),
+		ByModel:      make(map[string]CompressionModelStats),
 		Last24h:      make([]CompressionHourBucket, 0),
 		BySkipReason: make(map[string]int64),
 		RealUsage: CompressionRealUsage{
@@ -249,6 +273,40 @@ GROUP BY prov`, provWhere)
 		}
 	}
 
+	// By Model
+	modelWhere := "WHERE model IS NOT NULL AND model != ''"
+	modelArgs := []any{}
+	if cutoff != "" {
+		modelWhere += " AND timestamp >= ?"
+		modelArgs = append(modelArgs, cutoff)
+	}
+	modelQuery := fmt.Sprintf(`
+SELECT
+	COALESCE(model, 'unknown') as mdl,
+	COUNT(*) as cnt,
+	COALESCE(SUM(tokensSaved), 0) as saved,
+	COALESCE(AVG(CASE WHEN originalTokens > 0 THEN (tokensSaved * 100.0) / originalTokens ELSE 0 END), 0) as avgPct
+FROM compressionAnalytics
+%s
+GROUP BY mdl`, modelWhere)
+
+	modelRows, err := r.db.QueryContext(ctx, modelQuery, modelArgs...)
+	if err == nil {
+		defer modelRows.Close()
+		for modelRows.Next() {
+			var m string
+			var cnt, saved sql.NullInt64
+			var avgPct sql.NullFloat64
+			if err := modelRows.Scan(&m, &cnt, &saved, &avgPct); err == nil {
+				summary.ByModel[m] = CompressionModelStats{
+					Count:         cnt.Int64,
+					TokensSaved:   saved.Int64,
+					AvgSavingsPct: math.Round(avgPct.Float64),
+				}
+			}
+		}
+	}
+
 	// Hourly trend
 	trendCutoff := cutoff
 	if trendCutoff == "" {
@@ -308,7 +366,37 @@ FROM compressionAnalytics
 		summary.RealUsage.TotalTokens = rTotal.Int64
 		summary.RealUsage.CacheReadTokens = rRead.Int64
 		summary.RealUsage.CacheWriteTokens = rWrite.Int64
-		summary.RealUsage.EstimatedUsdSaved = math.Round((float64(summary.TotalTokensSaved)/1_000_000.0)*3.0*100) / 100
+		var dynamicUsd float64
+		pQuery := fmt.Sprintf(`
+SELECT
+	COALESCE(provider, 'unknown') as p,
+	COALESCE(model, 'unknown') as m,
+	COALESCE(SUM(tokensSaved), 0) as s
+FROM compressionAnalytics
+%s
+GROUP BY p, m
+HAVING s > 0`, whereClause)
+		pRows, pErr := r.db.QueryContext(ctx, pQuery, args...)
+		if pErr == nil {
+			defer pRows.Close()
+			for pRows.Next() {
+				var p, m string
+				var saved int64
+				if err := pRows.Scan(&p, &m, &saved); err == nil && saved > 0 {
+					mp, _ := pricing.GetPricingForModel(p, m)
+					rate := mp.InputPer1M
+					if rate <= 0 {
+						rate = defaultAvgInputPricePerMillion
+					}
+					dynamicUsd += (float64(saved) / 1_000_000.0) * rate
+				}
+			}
+		}
+		if dynamicUsd > 0 {
+			summary.RealUsage.EstimatedUsdSaved = math.Round(dynamicUsd*100) / 100
+		} else {
+			summary.RealUsage.EstimatedUsdSaved = math.Round((float64(summary.TotalTokensSaved)/1_000_000.0)*defaultAvgInputPricePerMillion*100) / 100
+		}
 	}
 
 	return summary, nil
@@ -435,6 +523,7 @@ SELECT
 	id,
 	timestamp,
 	provider,
+	COALESCE(model, '') as model,
 	data,
 	CAST(COALESCE(json_extract(data, '$.tokens.original_input_tokens'), 0) AS INTEGER) as origTokens,
 	CAST(COALESCE(json_extract(data, '$.tokens.compressed_input_tokens'), 0) AS INTEGER) as compTokens,
@@ -454,32 +543,38 @@ WHERE data IS NOT NULL AND json_valid(data)
 
 		insertStmt, prepErr := db.Prepare(`
 INSERT INTO compressionAnalytics (
-	timestamp, provider, mode, originalTokens, compressedTokens, tokensSaved,
+	timestamp, provider, model, mode, originalTokens, compressedTokens, tokensSaved,
 	durationMs, requestId, actualPromptTokens, actualCompletionTokens,
-	actualTotalTokens, actualCacheReadTokens, actualCacheWriteTokens, skipReason
+	actualTotalTokens, actualCacheReadTokens, actualCacheWriteTokens, estimatedUsdSaved, skipReason
 )
-SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ''
+SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ''
 WHERE NOT EXISTS (SELECT 1 FROM compressionAnalytics ca WHERE ca.requestId = ?)`)
 
 		if prepErr == nil {
 			defer insertStmt.Close()
 			for rows.Next() {
 				var (
-					id, ts, prov, data                          string
+					id, ts, prov, mdl, data                     string
 					origTok, compTok, savedTok, durMs           int
 					promptTok, compTok2, cachedTok, cacheWrTok int
 				)
 				if scanErr := rows.Scan(
-					&id, &ts, &prov, &data,
+					&id, &ts, &prov, &mdl, &data,
 					&origTok, &compTok, &savedTok, &durMs,
 					&promptTok, &compTok2, &cachedTok, &cacheWrTok,
 				); scanErr == nil {
 					mode := classifyHistoricalMode(data, savedTok)
 					totalTok := promptTok + compTok2
+					mp, _ := pricing.GetPricingForModel(prov, mdl)
+					rate := mp.InputPer1M
+					if rate <= 0 {
+						rate = defaultAvgInputPricePerMillion
+					}
+					estUsd := math.Round((float64(savedTok)/1_000_000.0)*rate*100) / 100
 					_, _ = insertStmt.Exec(
-						ts, prov, mode, origTok, compTok, savedTok,
+						ts, prov, mdl, mode, origTok, compTok, savedTok,
 						durMs, id, promptTok, compTok2,
-						totalTok, cachedTok, cacheWrTok,
+						totalTok, cachedTok, cacheWrTok, estUsd,
 						id,
 					)
 				}
@@ -492,6 +587,7 @@ WHERE NOT EXISTS (SELECT 1 FROM compressionAnalytics ca WHERE ca.requestId = ?)`
 SELECT
 	COALESCE(timestamp, ''),
 	COALESCE(provider, 'unknown'),
+	COALESCE(model, 'unknown'),
 	CAST(COALESCE(json_extract(tokens, '$.original_input_tokens'), promptTokens) AS INTEGER) as origTok,
 	CAST(COALESCE(json_extract(tokens, '$.compressed_input_tokens'), promptTokens) AS INTEGER) as compTok,
 	CAST(COALESCE(json_extract(tokens, '$.saved_tokens'), 0) AS INTEGER) as savedTok,
@@ -509,11 +605,11 @@ WHERE tokens IS NOT NULL AND json_valid(tokens)
 
 		uhInsertStmt, prepErr := db.Prepare(`
 INSERT INTO compressionAnalytics (
-	timestamp, provider, mode, originalTokens, compressedTokens, tokensSaved,
+	timestamp, provider, model, mode, originalTokens, compressedTokens, tokensSaved,
 	durationMs, requestId, actualPromptTokens, actualCompletionTokens,
-	actualTotalTokens, actualCacheReadTokens, actualCacheWriteTokens, skipReason
+	actualTotalTokens, actualCacheReadTokens, actualCacheWriteTokens, estimatedUsdSaved, skipReason
 )
-SELECT ?, ?, 'stacked', ?, ?, ?, 25, '', ?, ?, ?, ?, ?, ''
+SELECT ?, ?, ?, 'stacked', ?, ?, ?, 25, '', ?, ?, ?, ?, ?, ?, ''
 WHERE NOT EXISTS (
 	SELECT 1 FROM compressionAnalytics ca
 	WHERE ca.timestamp = ? AND ca.provider = ? AND ca.tokensSaved = ?
@@ -523,19 +619,25 @@ WHERE NOT EXISTS (
 			defer uhInsertStmt.Close()
 			for uhRows.Next() {
 				var (
-					ts, prov                                     string
+					ts, prov, mdl                                string
 					origTok, compTok, savedTok                   int
 					promptTok, compTok2, cachedTok, cacheWrTok int
 				)
 				if scanErr := uhRows.Scan(
-					&ts, &prov,
+					&ts, &prov, &mdl,
 					&origTok, &compTok, &savedTok,
 					&promptTok, &compTok2, &cachedTok, &cacheWrTok,
 				); scanErr == nil {
 					totalTok := promptTok + compTok2
+					mp, _ := pricing.GetPricingForModel(prov, mdl)
+					rate := mp.InputPer1M
+					if rate <= 0 {
+						rate = defaultAvgInputPricePerMillion
+					}
+					estUsd := math.Round((float64(savedTok)/1_000_000.0)*rate*100) / 100
 					_, _ = uhInsertStmt.Exec(
-						ts, prov, origTok, compTok, savedTok,
-						promptTok, compTok2, totalTok, cachedTok, cacheWrTok,
+						ts, prov, mdl, origTok, compTok, savedTok,
+						promptTok, compTok2, totalTok, cachedTok, cacheWrTok, estUsd,
 						ts, prov, savedTok,
 					)
 				}

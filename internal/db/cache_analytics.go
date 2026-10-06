@@ -6,10 +6,22 @@ import (
 	"fmt"
 	"math"
 	"time"
+
+	"9router/proxy/internal/pricing"
 )
 
 // PromptCacheProviderStats holds per-provider cache metrics.
 type PromptCacheProviderStats struct {
+	Requests            int64 `json:"requests"`
+	TotalRequests       int64 `json:"totalRequests"`
+	CachedRequests      int64 `json:"cachedRequests"`
+	InputTokens         int64 `json:"inputTokens"`
+	CachedTokens        int64 `json:"cachedTokens"`
+	CacheCreationTokens int64 `json:"cacheCreationTokens"`
+}
+
+// PromptCacheModelStats holds per-model cache metrics.
+type PromptCacheModelStats struct {
 	Requests            int64 `json:"requests"`
 	TotalRequests       int64 `json:"totalRequests"`
 	CachedRequests      int64 `json:"cachedRequests"`
@@ -28,6 +40,7 @@ type PromptCacheMetrics struct {
 	TokensSaved              int64                               `json:"tokensSaved"`
 	EstimatedCostSaved       float64                             `json:"estimatedCostSaved"`
 	ByProvider               map[string]PromptCacheProviderStats `json:"byProvider"`
+	ByModel                  map[string]PromptCacheModelStats    `json:"byModel"`
 	LastUpdated              string                              `json:"lastUpdated"`
 }
 
@@ -50,6 +63,7 @@ const (
 func (r *Repo) GetPromptCacheMetrics(ctx context.Context) (*PromptCacheMetrics, error) {
 	metrics := &PromptCacheMetrics{
 		ByProvider:  make(map[string]PromptCacheProviderStats),
+		ByModel:     make(map[string]PromptCacheModelStats),
 		LastUpdated: time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -95,8 +109,44 @@ FROM usageHistory`
 	metrics.TotalCacheCreationTokens = totalCacheCreationTokens.Int64
 	metrics.TokensSaved = metrics.TotalCachedTokens
 
-	savedDollars := (float64(metrics.TokensSaved) / 1_000_000.0) * defaultAvgInputPricePerMillion * defaultCacheSavingsDiscount
-	metrics.EstimatedCostSaved = math.Round(savedDollars*100) / 100
+	pricingQuery := `
+SELECT
+	COALESCE(provider, 'unknown') as provider,
+	COALESCE(model, 'unknown') as model,
+	COALESCE(SUM(CASE WHEN tokens IS NOT NULL AND json_valid(tokens)
+		THEN CAST(COALESCE(json_extract(tokens, '$.cached_tokens'), json_extract(tokens, '$.cache_read_input_tokens'), 0) AS INTEGER)
+		ELSE 0 END), 0) as cachedTokens
+FROM usageHistory
+WHERE tokens IS NOT NULL AND json_valid(tokens)
+GROUP BY provider, model
+HAVING cachedTokens > 0`
+
+	var dynamicSavings float64
+	pRows, pErr := r.db.QueryContext(ctx, pricingQuery)
+	if pErr == nil {
+		defer pRows.Close()
+		for pRows.Next() {
+			var p, m string
+			var ct int64
+			if err := pRows.Scan(&p, &m, &ct); err == nil && ct > 0 {
+				mp, _ := pricing.GetPricingForModel(p, m)
+				diff := mp.InputPer1M - mp.CachedPer1M
+				if diff <= 0 {
+					diff = mp.InputPer1M * defaultCacheSavingsDiscount
+				}
+				if diff <= 0 {
+					diff = defaultAvgInputPricePerMillion * defaultCacheSavingsDiscount
+				}
+				dynamicSavings += (float64(ct) / 1_000_000.0) * diff
+			}
+		}
+	}
+	if dynamicSavings > 0 {
+		metrics.EstimatedCostSaved = math.Round(dynamicSavings*100) / 100
+	} else {
+		savedDollars := (float64(metrics.TokensSaved) / 1_000_000.0) * defaultAvgInputPricePerMillion * defaultCacheSavingsDiscount
+		metrics.EstimatedCostSaved = math.Round(savedDollars*100) / 100
+	}
 
 	providerQuery := `
 SELECT
@@ -154,6 +204,57 @@ GROUP BY provider`
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("Repo.GetPromptCacheMetrics iterate providers: %w", err)
+	}
+
+	modelQuery := `
+SELECT
+	COALESCE(model, 'unknown') as model,
+	COUNT(*) as totalRequests,
+	SUM(CASE WHEN tokens IS NOT NULL AND json_valid(tokens) AND (
+		CAST(COALESCE(json_extract(tokens, '$.cached_tokens'), json_extract(tokens, '$.cache_read_input_tokens'), 0) AS INTEGER) > 0
+		OR CAST(COALESCE(json_extract(tokens, '$.cache_creation_input_tokens'), json_extract(tokens, '$.cache_creation_tokens'), 0) AS INTEGER) > 0
+	) THEN 1 ELSE 0 END) as cachedRequests,
+	COALESCE(SUM(promptTokens), 0) as inputTokens,
+	COALESCE(SUM(CASE WHEN tokens IS NOT NULL AND json_valid(tokens)
+		THEN CAST(COALESCE(json_extract(tokens, '$.cached_tokens'), json_extract(tokens, '$.cache_read_input_tokens'), 0) AS INTEGER)
+		ELSE 0 END), 0) as cachedTokens,
+	COALESCE(SUM(CASE WHEN tokens IS NOT NULL AND json_valid(tokens)
+		THEN CAST(COALESCE(json_extract(tokens, '$.cache_creation_input_tokens'), json_extract(tokens, '$.cache_creation_tokens'), 0) AS INTEGER)
+		ELSE 0 END), 0) as cacheCreationTokens
+FROM usageHistory
+WHERE model IS NOT NULL AND model != ''
+GROUP BY model`
+
+	mRows, mErr := r.db.QueryContext(ctx, modelQuery)
+	if mErr == nil {
+		defer mRows.Close()
+		for mRows.Next() {
+			var (
+				m                    string
+				mTotalRequests       sql.NullInt64
+				mCachedRequests      sql.NullInt64
+				mInputTokens         sql.NullInt64
+				mCachedTokens        sql.NullInt64
+				mCacheCreationTokens sql.NullInt64
+			)
+			if err := mRows.Scan(
+				&m,
+				&mTotalRequests,
+				&mCachedRequests,
+				&mInputTokens,
+				&mCachedTokens,
+				&mCacheCreationTokens,
+			); err == nil {
+				metrics.ByModel[m] = PromptCacheModelStats{
+					Requests:            mTotalRequests.Int64,
+					TotalRequests:       mTotalRequests.Int64,
+					CachedRequests:      mCachedRequests.Int64,
+					InputTokens:         mInputTokens.Int64,
+					CachedTokens:        mCachedTokens.Int64,
+					CacheCreationTokens: mCacheCreationTokens.Int64,
+				}
+			}
+		}
 	}
 
 	return metrics, nil

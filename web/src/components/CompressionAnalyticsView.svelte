@@ -92,6 +92,22 @@
     }).sort((a, b) => b.tokensSaved - a.tokensSaved)
   })
 
+  let modelList = $derived.by(() => {
+    if (!stats?.byModel) return []
+    const total = totalAttempts || 1
+    return Object.entries(stats.byModel).map(([model, data]) => {
+      const count = data.count ?? 0
+      const pct = Math.min(100, Math.round((count / total) * 100))
+      return {
+        model,
+        count,
+        tokensSaved: data.tokensSaved ?? 0,
+        avgSavingsPct: data.avgSavingsPct ?? 0,
+        pct,
+      }
+    }).sort((a, b) => b.tokensSaved - a.tokensSaved)
+  })
+
   let maxTrendTokens = $derived.by(() => {
     if (!stats?.last24h || stats.last24h.length === 0) return 1
     let m = 1
@@ -297,8 +313,8 @@
     {/if}
   </div>
 
-  <!-- Breakdown Grid: Modes & Providers -->
-  <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+  <!-- Breakdown Grid: Modes, Providers, Models -->
+  <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
     <!-- Breakdown by Mode -->
     <div class="rounded-2xl border border-border bg-surface p-5 shadow-sm space-y-4">
       <div class="flex items-center justify-between">
@@ -374,6 +390,48 @@
                 <div
                   class="h-full rounded-full bg-emerald-500 transition-all duration-300"
                   style="width: {p.pct}%"
+                ></div>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    <!-- Breakdown by Model -->
+    <div class="rounded-2xl border border-border bg-surface p-5 shadow-sm space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-text-main flex items-center gap-1.5">
+          <span class="material-symbols-outlined text-[18px] text-brand-500">model_training</span>
+          Breakdown by Model
+        </h3>
+        <span class="text-xs text-text-muted">{modelList.length} model(s)</span>
+      </div>
+
+      {#if modelList.length === 0}
+        <div class="py-8 text-center text-xs text-text-subtle">
+          No model compression data recorded yet.
+        </div>
+      {:else}
+        <div class="space-y-4">
+          {#each modelList as m}
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between text-xs">
+                <span class="font-semibold text-text-main font-mono text-[11px] truncate max-w-[140px]" title={m.model}>
+                  {m.model}
+                </span>
+                <span class="text-text-muted text-[11px]">
+                  <span class="text-text-main font-medium">{m.count}</span> runs •
+                  <span class="text-cyan-400 font-mono font-medium">{m.tokensSaved.toLocaleString()}</span> tokens
+                  {#if m.avgSavingsPct > 0}
+                    • {m.avgSavingsPct}%
+                  {/if}
+                </span>
+              </div>
+              <div class="h-2 w-full rounded-full bg-surface-2 overflow-hidden">
+                <div
+                  class="h-full rounded-full bg-blue-500 transition-all duration-300"
+                  style="width: {m.pct}%"
                 ></div>
               </div>
             </div>

@@ -63,6 +63,7 @@ type UsageLogInfo struct {
 	OriginalInputTokens int
 	SavedTokens         int
 	SavedPercent        int
+	CompressionDurationMs int
 }
 
 // ConnIdentityKV returns the log key/value pairs naming the account behind a

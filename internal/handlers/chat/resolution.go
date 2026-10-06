@@ -43,12 +43,18 @@ func NewChatHandler(repo *db.Repo, ts ...*shared.TokenSaverConfig) *ChatHandler 
 	}
 	var sc *semanticcache.Cache
 	if cfg != nil {
+		ttl := time.Duration(cfg.SemanticCacheTTL()) * time.Minute
+		maxEntries := cfg.SemanticCacheMaxEntries()
+		var store semanticcache.Store
+		if repo != nil && repo.RawDB() != nil {
+			store = semanticcache.NewPersistentStore(repo.RawDB(), maxEntries, ttl)
+		}
 		sc = semanticcache.New(semanticcache.Config{
 			Enabled:             cfg.SemanticCacheEnabled(),
-			TTL:                 time.Duration(cfg.SemanticCacheTTL()) * time.Minute,
-			MaxEntries:          cfg.SemanticCacheMaxEntries(),
+			TTL:                 ttl,
+			MaxEntries:          maxEntries,
 			SimilarityThreshold: 0.95,
-		}, nil, cfg.SemanticCacheEnabled)
+		}, store, cfg.SemanticCacheEnabled)
 	}
 	return &ChatHandler{
 		Repo: repo,

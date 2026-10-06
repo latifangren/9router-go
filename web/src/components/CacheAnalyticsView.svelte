@@ -166,6 +166,24 @@
     }).sort((a, b) => b.cachedTokens - a.cachedTokens)
   })
 
+  let modelRows = $derived.by(() => {
+    if (!pc?.byModel) return []
+    return Object.entries(pc.byModel).map(([name, data]) => {
+      const totalReq = data.totalRequests ?? 0
+      const cachedReq = data.cachedRequests ?? 0
+      const rate = totalReq > 0 ? (cachedReq / totalReq) * 100 : 0
+      return {
+        name,
+        totalRequests: totalReq,
+        cachedRequests: cachedReq,
+        inputTokens: data.inputTokens ?? 0,
+        cachedTokens: data.cachedTokens ?? 0,
+        cacheCreationTokens: data.cacheCreationTokens ?? 0,
+        rate,
+      }
+    }).sort((a, b) => b.cachedTokens - a.cachedTokens)
+  })
+
   let maxTrendRequests = $derived.by(() => {
     if (!stats?.trend || stats.trend.length === 0) return 1
     let m = 1
@@ -436,6 +454,55 @@
                 <tr class="hover:bg-surface-2/60 transition-colors">
                   <td class="py-2.5 px-3 font-semibold text-text-main flex items-center gap-2">
                     <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+                    {row.name}
+                  </td>
+                  <td class="py-2.5 px-3 text-right text-text-muted">
+                    <span class="text-text-main font-medium">{row.cachedRequests}</span> / {row.totalRequests}
+                  </td>
+                  <td class="py-2.5 px-3 text-right text-cyan-400 font-mono font-medium">
+                    {row.cachedTokens.toLocaleString()}
+                  </td>
+                  <td class="py-2.5 px-3 text-right text-purple-400 font-mono font-medium">
+                    {row.cacheCreationTokens.toLocaleString()}
+                  </td>
+                  <td class="py-2.5 px-3 text-right font-medium text-emerald-500">
+                    {row.rate.toFixed(1)}%
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
+    </div>
+
+    <!-- Model Breakdown Table -->
+    <div class="rounded-2xl border border-border bg-surface p-5 shadow-sm">
+      <h3 class="text-sm font-semibold text-text-main mb-3 flex items-center gap-1.5">
+        <span class="material-symbols-outlined text-[18px] text-brand-500">model_training</span>
+        Breakdown by Model
+      </h3>
+
+      {#if modelRows.length === 0}
+        <div class="py-8 text-center text-xs text-text-subtle">
+          No model prompt cache data recorded yet.
+        </div>
+      {:else}
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead>
+              <tr class="border-b border-border text-text-muted">
+                <th class="py-2.5 px-3 font-semibold">Model</th>
+                <th class="py-2.5 px-3 font-semibold text-right">Cached / Total Req</th>
+                <th class="py-2.5 px-3 font-semibold text-right">Cached Tokens</th>
+                <th class="py-2.5 px-3 font-semibold text-right">Creation Tokens</th>
+                <th class="py-2.5 px-3 font-semibold text-right">Hit Rate</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-border-subtle">
+              {#each modelRows as row}
+                <tr class="hover:bg-surface-2/60 transition-colors">
+                  <td class="py-2.5 px-3 font-semibold text-text-main font-mono text-[11px]">
                     {row.name}
                   </td>
                   <td class="py-2.5 px-3 text-right text-text-muted">
