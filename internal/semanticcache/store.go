@@ -12,8 +12,13 @@ import (
 type Store interface {
 	Get(ctx context.Context, key string) (Entry, bool)
 	Put(ctx context.Context, key string, e Entry) error
+	Delete(ctx context.Context, key string) bool
 	Len() int
 	Clear()
+	Entries() []Entry
+	InvalidateByModel(ctx context.Context, model string) int
+	InvalidateOlderThan(ctx context.Context, d time.Duration) int
+	RecordHit(ctx context.Context, key string, tokensSaved int64)
 }
 
 type lruItem struct {
@@ -30,7 +35,7 @@ type LRUStore struct {
 	ttl        time.Duration
 }
 
-// NewLRUStore creates a thread-safe LRUStore bounded by maxEntries and ttl.
+// NewLRUStore creates a thread-safe LRUStore bounded by maxEntries and TTL.
 func NewLRUStore(maxEntries int, ttl time.Duration) *LRUStore {
 	if maxEntries <= 0 {
 		maxEntries = 1000
@@ -61,13 +66,12 @@ func (s *LRUStore) Get(_ context.Context, key string) (Entry, bool) {
 	}
 
 	s.evictList.MoveToFront(elem)
-	cloned := item.entry
-	cloned.ResponseBody = bytes.Clone(item.entry.ResponseBody)
-	return cloned, true
+	clone := item.entry
+	clone.ResponseBody = bytes.Clone(item.entry.ResponseBody)
+	return clone, true
 }
 
-// Put inserts or updates a cache entry.
-// Clones ResponseBody before storing.
+// Put adds or updates an entry for key, evicting the least recently used if full.
 func (s *LRUStore) Put(_ context.Context, key string, e Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -93,6 +97,91 @@ func (s *LRUStore) Put(_ context.Context, key string, e Entry) error {
 	elem := s.evictList.PushFront(item)
 	s.items[key] = elem
 	return nil
+}
+
+// Delete removes an entry by key.
+func (s *LRUStore) Delete(_ context.Context, key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	elem, ok := s.items[key]
+	if !ok {
+		return false
+	}
+	s.removeElement(elem)
+	return true
+}
+
+// RecordHit increments hit counter and tokens saved for a key.
+func (s *LRUStore) RecordHit(_ context.Context, key string, tokensSaved int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if elem, ok := s.items[key]; ok {
+		item := elem.Value.(*lruItem)
+		item.entry.HitCount++
+		item.entry.TokensSaved += tokensSaved
+	}
+}
+
+// Entries returns active (non-expired) entries in the store.
+func (s *LRUStore) Entries() []Entry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	now := time.Now()
+	res := make([]Entry, 0, len(s.items))
+	for _, elem := range s.items {
+		item := elem.Value.(*lruItem)
+		if s.ttl > 0 && now.Sub(item.entry.StoredAt) > s.ttl {
+			continue
+		}
+		clone := item.entry
+		clone.ResponseBody = bytes.Clone(item.entry.ResponseBody)
+		res = append(res, clone)
+	}
+	return res
+}
+
+// InvalidateByModel removes all entries matching the given model name.
+func (s *LRUStore) InvalidateByModel(_ context.Context, model string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	count := 0
+	var toRemove []*list.Element
+	for _, elem := range s.items {
+		item := elem.Value.(*lruItem)
+		if item.entry.Model == model {
+			toRemove = append(toRemove, elem)
+		}
+	}
+	for _, elem := range toRemove {
+		s.removeElement(elem)
+		count++
+	}
+	return count
+}
+
+// InvalidateOlderThan removes entries stored longer than duration d ago.
+func (s *LRUStore) InvalidateOlderThan(_ context.Context, d time.Duration) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	count := 0
+	now := time.Now()
+	var toRemove []*list.Element
+	for _, elem := range s.items {
+		item := elem.Value.(*lruItem)
+		if now.Sub(item.entry.StoredAt) > d {
+			toRemove = append(toRemove, elem)
+		}
+	}
+	for _, elem := range toRemove {
+		s.removeElement(elem)
+		count++
+	}
+	return count
 }
 
 func (s *LRUStore) removeElement(elem *list.Element) {

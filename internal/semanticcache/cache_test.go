@@ -223,3 +223,87 @@ func TestSemanticCache_ConcurrentParallelAccess(t *testing.T) {
 		t.Fatalf("cache size %d exceeded maxEntries 100", cache.Len())
 	}
 }
+
+func TestSemanticCache_StatsAndListing(t *testing.T) {
+	cache := New(Config{
+		Enabled:    true,
+		TTL:        1 * time.Hour,
+		MaxEntries: 10,
+	}, nil)
+
+	ctx := context.Background()
+	req1 := &translator.OpenAIRequest{
+		Model: "gpt-4o",
+		Messages: []translator.OpenAIMessage{
+			{Role: "user", Content: "hello"},
+		},
+	}
+	req2 := &translator.OpenAIRequest{
+		Model: "claude-3-5",
+		Messages: []translator.OpenAIMessage{
+			{Role: "user", Content: "world"},
+		},
+	}
+
+	// Initial lookup -> miss
+	_, _, found := cache.Lookup(ctx, req1)
+	if found {
+		t.Fatal("expected miss")
+	}
+	stats := cache.Stats()
+	if stats.Misses != 1 || stats.Hits != 0 {
+		t.Fatalf("stats = %+v, want 1 miss, 0 hits", stats)
+	}
+
+	// Store response with usage tokens
+	respBody := []byte(`{"id":"chatcmpl-1","usage":{"completion_tokens":20,"total_tokens":50}}`)
+	if err := cache.Store(ctx, req1, respBody, "application/json"); err != nil {
+		t.Fatalf("store err = %v", err)
+	}
+	if err := cache.Store(ctx, req2, respBody, "application/json"); err != nil {
+		t.Fatalf("store req2 err = %v", err)
+	}
+
+	// Lookup req1 -> hit
+	entry, _, found := cache.Lookup(ctx, req1)
+	if !found || entry == nil {
+		t.Fatal("expected hit")
+	}
+	stats = cache.Stats()
+	if stats.Hits != 1 || stats.TokensSaved != 50 {
+		t.Fatalf("stats = %+v, want 1 hit, 50 tokensSaved", stats)
+	}
+	if stats.HitRate != "50.0" {
+		t.Errorf("hitRate = %s, want 50.0", stats.HitRate)
+	}
+
+	// List entries
+	entries, total := cache.ListEntries(1, 10, "", "", "created_at", "desc")
+	if total != 2 || len(entries) != 2 {
+		t.Fatalf("ListEntries total = %d, len = %d, want 2", total, len(entries))
+	}
+
+	// Filter by model
+	entriesModel, totalModel := cache.ListEntries(1, 10, "", "gpt-4o", "created_at", "desc")
+	if totalModel != 1 || len(entriesModel) != 1 || entriesModel[0].Model != "gpt-4o" {
+		t.Fatalf("Filter by model failed: %+v", entriesModel)
+	}
+
+	// Invalidate by model
+	invCount := cache.InvalidateByModel(ctx, "claude-3-5")
+	if invCount != 1 {
+		t.Fatalf("InvalidateByModel count = %d, want 1", invCount)
+	}
+	if cache.Len() != 1 {
+		t.Fatalf("cache.Len = %d, want 1", cache.Len())
+	}
+
+	// Delete single entry
+	delOk := cache.DeleteEntry(ctx, entriesModel[0].ID)
+	if !delOk {
+		t.Fatal("expected DeleteEntry to succeed")
+	}
+	if cache.Len() != 0 {
+		t.Fatalf("cache.Len = %d, want 0", cache.Len())
+	}
+}

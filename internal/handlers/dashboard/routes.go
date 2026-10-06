@@ -4,9 +4,9 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlers/shared"
+	"9router/proxy/internal/semanticcache"
 )
 
 // Default probe URLs for proxy pool health checks.
@@ -21,6 +21,7 @@ type DashboardHandler struct {
 	PrimaryProbeURL   string
 	SecondaryProbeURL string
 	TokenSaver        *shared.TokenSaverConfig
+	SemanticCache     *semanticcache.Cache
 }
 
 // NewDashboardHandler initializes a DashboardHandler with the provided Repo.
@@ -123,5 +124,11 @@ func RegisterRoutes(r chi.Router, h *DashboardHandler) {
 		// before-parameter ordering that /usage/providers needs.
 		r.Get("/usage/{connectionId}/reset-credits", h.HandleListCodexResetCredits)
 		r.Post("/usage/{connectionId}/reset-credits/consume", h.HandleConsumeCodexResetCredit)
+
+		// Cache Analytics & Management
+		r.Get("/cache", h.HandleGetCache)
+		r.Delete("/cache", h.HandleDeleteCache)
+		r.Get("/cache/entries", h.HandleGetCacheEntries)
+		r.Delete("/cache/entries", h.HandleDeleteCacheEntry)
 	})
 }

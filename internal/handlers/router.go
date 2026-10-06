@@ -150,6 +150,9 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 		ts = chatH.TokenSaver
 	}
 	dashH := dashboard.NewDashboardHandler(repo, ts)
+	if chatH != nil {
+		dashH.SemanticCache = chatH.SemanticCache
+	}
 	ssoH := sso.NewHandler(repo)
 
 	r.Get("/api/connections", dashH.HandleGetConnections)
@@ -177,6 +180,12 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 
 	r.Get("/api/usage/{connectionId}/reset-credits", dashH.HandleListCodexResetCredits)
 	r.Post("/api/usage/{connectionId}/reset-credits/consume", dashH.HandleConsumeCodexResetCredit)
+
+	// Cache Analytics & Management
+	r.Get("/api/cache", dashH.HandleGetCache)
+	r.Delete("/api/cache", dashH.HandleDeleteCache)
+	r.Get("/api/cache/entries", dashH.HandleGetCacheEntries)
+	r.Delete("/api/cache/entries", dashH.HandleDeleteCacheEntry)
 
 	r.Get("/api/provider-nodes", dashH.HandleGetProviderNodes)
 	r.Post("/api/provider-nodes", dashH.HandleCreateProviderNode)

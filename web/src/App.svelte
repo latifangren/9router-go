@@ -33,6 +33,7 @@
   import Toasts from './lib/ui/Toasts.svelte'
   import TerminalView from './components/TerminalView.svelte'
   import TokenSaverView from './components/TokenSaverView.svelte'
+  import CacheAnalyticsView from './components/CacheAnalyticsView.svelte'
   import TopBar from './components/TopBar.svelte'
   import { parseMediaProvider, parseProviderId, pathToTab, providerPath, mediaProviderPath, TAB_ROUTES, type ActiveTab, type MediaProviderRoute } from './lib/router'
   import { PROVIDER_CATALOG } from './lib/providers'
@@ -364,6 +365,8 @@
               <QuotaTrackerView {connections} />
             {:else if activeTab === 'token-saver'}
               <TokenSaverView {settings} onRefresh={loadData} />
+            {:else if activeTab === 'cache'}
+              <CacheAnalyticsView />
             {:else if activeTab === 'cli-tools'}
               <CliToolsView {apiKeys} onRefresh={loadData} />
             {:else if activeTab === 'keys'}

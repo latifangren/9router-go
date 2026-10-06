@@ -380,6 +380,78 @@ export interface LoginResponse {
   remainingBeforeLock?: number
 }
 
+export interface SemanticCacheStats {
+  memoryEntries: number
+  dbEntries: number
+  hits: number
+  misses: number
+  hitRate: string
+  tokensSaved: number
+}
+
+export interface PromptCacheProviderStats {
+  requests: number
+  totalRequests?: number
+  cachedRequests?: number
+  inputTokens: number
+  cachedTokens: number
+  cacheCreationTokens: number
+}
+
+export interface PromptCacheMetrics {
+  totalRequests: number
+  requestsWithCacheControl: number
+  totalInputTokens: number
+  totalCachedTokens: number
+  totalCacheCreationTokens: number
+  tokensSaved: number
+  estimatedCostSaved: number
+  byProvider: Record<string, PromptCacheProviderStats>
+  lastUpdated: string
+}
+
+export interface CacheTrendPoint {
+  timestamp: string
+  requests: number
+  cachedRequests: number
+  inputTokens: number
+  cachedTokens: number
+  cacheCreationTokens: number
+}
+
+export interface CacheStatsResponse {
+  semanticCache: SemanticCacheStats
+  promptCache: PromptCacheMetrics | null
+  trend: CacheTrendPoint[]
+  idempotency: {
+    activeKeys: number
+    windowMs: number
+  }
+  config?: {
+    semanticCacheEnabled: boolean
+  }
+}
+
+export interface CacheEntryMeta {
+  id: string
+  signature: string
+  model: string
+  hit_count: number
+  tokens_saved: number
+  created_at: string
+  expires_at: string
+}
+
+export interface CacheEntriesResponse {
+  entries: CacheEntryMeta[]
+  pagination: {
+    page: number
+    limit: number
+    total: number
+    totalPages: number
+  }
+}
+
 export function isAuthenticated(): boolean {
   if (typeof window === 'undefined') return false
   if (sessionStorage.getItem('9router_auth') === 'true' || localStorage.getItem('9router_auth') === 'true') {
@@ -1268,6 +1340,41 @@ export const api = {
     err.mustChangePassword = mustChangePassword
     throw err
   },
+    // Cache Analytics
+    getCacheStats: (trendHours = 24) =>
+      request<CacheStatsResponse>(`/api/cache?trendHours=${trendHours}`),
+    deleteCache: (params?: { model?: string; signature?: string; staleMs?: number }) => {
+      const sp = new URLSearchParams()
+      if (params?.model) sp.set('model', params.model)
+      if (params?.signature) sp.set('signature', params.signature)
+      if (params?.staleMs) sp.set('staleMs', String(params.staleMs))
+      const qs = sp.toString()
+      return request<{ success: boolean; count?: number }>(`/api/cache${qs ? `?${qs}` : ''}`, {
+        method: 'DELETE',
+      })
+    },
+    getCacheEntries: (params?: {
+      page?: number
+      limit?: number
+      search?: string
+      model?: string
+      sortBy?: string
+      sortOrder?: string
+    }) => {
+      const sp = new URLSearchParams()
+      if (params?.page) sp.set('page', String(params.page))
+      if (params?.limit) sp.set('limit', String(params.limit))
+      if (params?.search) sp.set('search', params.search)
+      if (params?.model) sp.set('model', params.model)
+      if (params?.sortBy) sp.set('sortBy', params.sortBy)
+      if (params?.sortOrder) sp.set('sortOrder', params.sortOrder)
+      const qs = sp.toString()
+      return request<CacheEntriesResponse>(`/api/cache/entries${qs ? `?${qs}` : ''}`)
+    },
+    deleteCacheEntry: (id: string) =>
+      request<{ success: boolean }>(`/api/cache/entries?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      }),
   logout: async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' })

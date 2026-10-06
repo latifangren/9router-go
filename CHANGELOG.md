@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### ⚡ Cache Analytics & Tracking Dashboard (port OmniRoute `/dashboard/cache`)
+
+- **Backend**:
+  - `internal/db/cache_analytics.go`: Menambahkan `GetPromptCacheMetrics` dan `GetPromptCacheTrend` untuk agregasi data prompt caching dari tabel `usageHistory` (`cached_tokens` dan `cache_creation_input_tokens`).
+  - `internal/semanticcache/`: Menambahkan atomic metrics counter (`hits`, `misses`, `tokensSaved`), paginated entry listing (`ListEntries`), invalidasi berdasarkan model/stale TTL, serta penanganan delete single entry.
+  - `internal/handlers/dashboard/cache.go`: Menambahkan endpoint REST API `GET /api/cache`, `DELETE /api/cache`, `GET /api/cache/entries`, dan `DELETE /api/cache/entries`.
+- **Frontend**:
+  - `web/src/components/CacheAnalyticsView.svelte`: UI Svelte 5 runes untuk Prompt Cache (5 hero metrics cards, interactive hourly trend chart, breakdown per provider) dan Semantic Cache (hits/misses meter, invalidasi model, tabel cached entries dengan filter dan paginasi).
+  - Integrasi tab `/dashboard/cache` di `web/src/lib/router.ts`, `web/src/components/Sidebar.svelte`, dan `web/src/App.svelte`.
+
 ### 🩹 Pembacaan usage yang gagal diam-diam dilaporkan sebagai nol — dashboard Usage & Analytics
 
 `GetUsageDailyRecent`, `GetUsageHistorySince`, `GetRecentUsageHistory`,

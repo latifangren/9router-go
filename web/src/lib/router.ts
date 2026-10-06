@@ -6,6 +6,7 @@ export type ActiveTab =
   | 'analytics'
   | 'quota'
   | 'token-saver'
+  | 'cache'
   | 'cli-tools'
   | 'media-embedding'
   | 'media-image'
@@ -29,6 +30,7 @@ export const TAB_ROUTES: Record<ActiveTab, string> = {
   analytics: '/dashboard/usage',
   quota: '/dashboard/quota',
   'token-saver': '/dashboard/token-saver',
+  cache: '/dashboard/cache',
   'cli-tools': '/dashboard/cli-tools',
   'media-embedding': '/dashboard/media-providers/embedding',
   'media-image': '/dashboard/media-providers/image',
@@ -78,6 +80,10 @@ const ROUTE_TO_TAB: Record<string, ActiveTab> = {
   // token saver
   '/dashboard/token-saver': 'token-saver',
   '/token-saver': 'token-saver',
+
+  // cache analytics
+  '/dashboard/cache': 'cache',
+  '/cache': 'cache',
 
   // cli-tools
   '/dashboard/cli-tools': 'cli-tools',
