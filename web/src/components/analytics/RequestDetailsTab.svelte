@@ -4,6 +4,8 @@
   import Button from '../../lib/ui/Button.svelte'
   import Card from '../../lib/ui/Card.svelte'
   import { getIconPath } from '../connections/types'
+  import { api, normalizeLastError, type ProviderConnection } from '../../api/client'
+  import { copyToClipboard } from '../../lib/clipboard'
   import {
     cachedTokensFor,
     calculateTPS,
@@ -14,8 +16,6 @@
     formatLocalTimestamp,
     type RequestDetailItem,
   } from './types'
-  import type { ProviderConnection } from '../../api/client'
-  import { copyToClipboard } from '../../lib/clipboard'
 
   interface Props {
     details?: RequestDetailItem[]
@@ -45,6 +45,42 @@
 
   let selectedDetail = $state<RequestDetailItem | null>(null)
   let searchFilter = $state('')
+  let detailLoading = $state(false)
+  let detailError = $state('')
+
+  // The list response carries only what the table renders — the request
+  // messages and response body stay server-side until a row is opened, which
+  // keeps a page at a few KB instead of a few hundred. Clicking View therefore
+  // opens the modal on the summary fields and fills in the rest once the
+  // by-id read lands.
+  async function openDetail(item: RequestDetailItem) {
+    selectedDetail = item
+    detailError = ''
+    const id = item.id
+    if (!id) {
+      detailError = 'This row has no id, so its full payload cannot be loaded.'
+      return
+    }
+    detailLoading = true
+    try {
+      const res = await api.getRequestDetail(id)
+      // A newer row opened while this read was in flight wins.
+      if (selectedDetail?.id === id && res?.detail) {
+        selectedDetail = { ...selectedDetail, ...(res.detail as RequestDetailItem) }
+      }
+    } catch (err) {
+      if (selectedDetail?.id === id) {
+        detailError = normalizeLastError(err) || 'The full payload could not be loaded.'
+      }
+    } finally {
+      detailLoading = false
+    }
+  }
+
+  function closeDetail() {
+    selectedDetail = null
+    detailError = ''
+  }
 
   function resolveAccount(item: RequestDetailItem | null | undefined): { name: string; email?: string } {
     if (!item) return { name: 'Default' }
@@ -155,7 +191,7 @@
             {@const acc = resolveAccount(item)}
             <tr
               class="hover:bg-surface-2 transition-colors cursor-pointer"
-              onclick={() => (selectedDetail = item)}
+              onclick={() => openDetail(item)}
             >
               <td class="py-3 px-4">
                 <span
@@ -226,7 +262,7 @@
                   type="button"
                   onclick={(e) => {
                     e.stopPropagation()
-                    selectedDetail = item
+                    openDetail(item)
                   }}
                   class="text-xs text-brand-500 hover:underline font-semibold cursor-pointer"
                 >
@@ -298,7 +334,7 @@
         </div>
         <button
           type="button"
-          onclick={() => (selectedDetail = null)}
+          onclick={closeDetail}
           class="p-1 rounded-lg text-text-muted hover:text-text-main hover:bg-surface-3 transition-colors cursor-pointer"
           aria-label="Close"
         >
@@ -474,9 +510,10 @@
             </div>
           {/if}
         </div>
-        <div class="p-3.5 rounded-xl bg-surface-2/60 border border-border space-y-2">
-          <div class="flex items-center justify-between text-[10px] uppercase font-bold text-text-muted tracking-wider">
-            <span>Payload Inspection (JSON)</span>
+        <!-- Raw JSON details inspector with loading & error states -->
+        <div class="space-y-1.5 pt-2 border-t border-border/60">
+          <div class="flex items-center justify-between text-xs text-text-muted">
+            <span class="font-semibold text-text-main uppercase text-[10px] tracking-wider">Payload</span>
             <button
               type="button"
               onclick={() => copyToClipboard(JSON.stringify(selectedDetail, null, 2))}
@@ -486,15 +523,27 @@
               copy json
             </button>
           </div>
-          <pre class="font-code text-[11px] p-3 rounded-lg bg-surface-3/80 border border-border-subtle max-h-60 overflow-y-auto overflow-x-auto text-text-main whitespace-pre-wrap">
-            {JSON.stringify(selectedDetail, null, 2)}
-          </pre>
+          {#if detailError}
+            <div role="alert" class="p-3 rounded-xl bg-red-500/10 border border-red-500/25 font-body text-[11px] text-red-600 dark:text-red-400 break-words">
+              {detailError}
+            </div>
+          {:else if detailLoading}
+            <div class="p-8 rounded-xl bg-bg border border-border flex items-center justify-center gap-2 font-body text-[11px] text-text-muted">
+              <span class="w-3.5 h-3.5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin"></span>
+              Loading full payload...
+            </div>
+          {:else}
+            <pre class="font-code text-[11px] p-3 rounded-lg bg-surface-3/80 border border-border-subtle max-h-60 overflow-y-auto overflow-x-auto text-text-main whitespace-pre-wrap">
+{JSON.stringify(selectedDetail, null, 2)}
+            </pre>
+          {/if}
+        </div>
         </div>
       </div>
 
       <!-- Modal Footer -->
       <div class="px-6 py-3 border-t border-border bg-surface-2 flex justify-end">
-        <Button variant="secondary" size="sm" onclick={() => (selectedDetail = null)}>
+        <Button variant="secondary" size="sm" onclick={closeDetail}>
           Close
         </Button>
       </div>
