@@ -3,6 +3,7 @@ package chat
 import (
 	"net/http"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/singleflight"
 
@@ -31,6 +32,11 @@ type ChatHandler struct {
 	stickyMu            sync.Mutex
 	stickyState         map[string]*comboStickyState
 	oauthRefreshFlight  singleflight.Group
+	// deprecationCache throttles kv writes when a provider retires a model:
+	// every request at a dead combo entry arrives as a fresh 410, and each
+	// one would otherwise upsert the same row.
+	deprecationMu    sync.Mutex
+	deprecationCache map[string]time.Time
 }
 
 // Type aliases for shared types
