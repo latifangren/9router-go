@@ -89,7 +89,27 @@
 
 Verifikasi: `go build ./...`, `go vet ./...`, `go test ./...` hijau,
 `go test -tags=integration ./internal/integration/...` hijau, `bun test` 238/238,
-`bun run build`, dan `bun run ratchet:svelte` (0 unresolved, 88 = baseline).
+`bun run build`, dan `bun run ratchet:svelte` (0 unresolved, 89 = baseline).
+
+### 🐛 `TestUsageWindowCache_DistinctWindowsDoNotShareTotals` gagal di runner antara 20:00–03:59
+
+Test itu menaruh satu baris pada `now-20h`, lalu memastikan window "today"
+dan "24h" menghitung baris berbeda. Tapi `today` dipotong di tengah malam
+lokal, jadi `now-20h` hanya berada di luar "today" ketika tengah malam
+sudah setidaknya 20 jam berlalu — yaitu antara jam 00:00 dan 03:59. Di luar
+jam itu baris itu justru masuk ke "today", kedua window sama-sama melihat
+2 baris, dan assertion gagal padahal cache-nya benar. Runner yang mulai
+pukul 23:23 UTC berada tepat di rentang itu, jadi CI merah pada commit
+`9b553e7` yang sudah lolos review.
+
+Baris pemisah sekarang ditempatkan relatif terhadap tengah malam lokal —
+`midnight - 1s` — dan dibangun dengan cara yang sama seperti
+`resolveUsagePeriod` membangunnya, yaitu `now.Location()` bukan UTC, supaya
+marker tidak bergeser sebesar offset runner. Instan itu di luar "today"
+pada setiap jam, dan tetap di dalam "24h" pada setiap jam: tengah malam
+tidak pernah berumur 24 jam penuh, jadi selalu lebih baru dari batas bawah
+window 24h. Sweep 24 jam lolos di UTC, Asia/Jakarta, America/New_York,
+Australia/Sydney, dan Pacific/Kiritimati.
 
 ### 🔐 Per-key governance, credential vault, and guardrails (KeiRouter port, Path C)
 
