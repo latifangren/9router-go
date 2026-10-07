@@ -28,7 +28,13 @@ func NewTokenSaverConfig(rtk, caveman, ponytail bool) *TokenSaverConfig {
 	return shared.NewTokenSaverConfig(rtk, caveman, ponytail)
 }
 
-// SetupRoutes mounts all domain handlers on the provided router.
+// SetupRoutes mounts all domain handlers on the provided router. It returns the
+// engine's chat handler, which owns the semantic cache the engine actually
+// reads and writes. The caller must pass that same handler to
+// SetupDashboardRoutes: a second NewChatHandler builds a second
+// PersistentStore over the same SQLite file with its own in-memory LRU, so the
+// dashboard would report zero entries while the engine served hits, and
+// clearing entries from the dashboard would leave the engine still serving them.
 func SetupRoutes(r interface {
 	Get(pattern string, handlerFn http.HandlerFunc)
 	Post(pattern string, handlerFn http.HandlerFunc)
@@ -36,7 +42,7 @@ func SetupRoutes(r interface {
 	Patch(pattern string, handlerFn http.HandlerFunc)
 	Delete(pattern string, handlerFn http.HandlerFunc)
 	HandleFunc(pattern string, handlerFn http.HandlerFunc)
-}, repo *db.Repo, ts *TokenSaverConfig) {
+}, repo *db.Repo, ts *TokenSaverConfig) *chat.ChatHandler {
 	chatH := chat.NewChatHandler(repo, ts)
 	mediaH := media.NewMediaHandler(repo, ts, chatH)
 	oauthH := oauth.NewOAuthHandler(repo)
@@ -142,6 +148,7 @@ func SetupRoutes(r interface {
 
 	// Debug Tracing Domain (p50/p95 latency per provider+model)
 	r.Get("/debug/traces", HandleDebugTraces)
+	return chatH
 }
 
 // SetupDashboardRoutes mounts the dashboard REST API. It is wrapped in
@@ -467,16 +474,19 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) {
 	})
 
 	// API-key protected domain routes
+	var engineChatH *chat.ChatHandler
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireApiKey(repo))
-		SetupRoutes(r, repo, ts)
+		engineChatH = SetupRoutes(r, repo, ts)
 	})
 
 	// Dashboard management API: login-gated when requireLogin is on, but still
 	// reachable with a valid API key or the local CLI token (upstream parity).
+	// It reads the cache through the engine's chat handler: versionH was built
+	// before any traffic, so the cache on that instance never fills.
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireDashboardAuth(repo))
-		SetupDashboardRoutes(r, repo, versionH)
+		SetupDashboardRoutes(r, repo, engineChatH)
 	})
 
 	// CLI Tools status is a dashboard read: the SPA calls it with the session

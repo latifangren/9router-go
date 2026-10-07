@@ -26,7 +26,100 @@
 - **Fallback Creation Tokens**: Menambahkan formula fallback di `internal/db/cache_analytics.go` untuk menangkap token pembuatan prompt cache pada provider Antigravity/Gemini yang tidak mengirim key eksplisit (`cache_creation_input_tokens`).
 - **Background TTL Janitor**: Menambahkan ticker background berkala di `internal/semanticcache/persistent_store.go` untuk membersihkan entri kadaluarsa di RAM dan SQLite secara otomatis, mencegah database membengkak seiring waktu.
 
-### 🧪 Rilis split dua channel: stabil & experimental — dipilah dari tag
+### 🐛 Enam cacat yang ditemukan saat review PR #193 (sudah diperbaiki di branch ini)
+
+1. **Cache key multimodal bertabrakan — dua klien saling menerima respons.**
+   `BuildCacheKey` hanya hashed blok `type == "text"`, sehingga pesan berisi
+   gambar/file menuliskan role + pemisah tanpa payload apa pun. Dua request yang
+   hanya berbeda pada byte gambarnya menghasilkan key identik, dan `Lookup`
+   mengembalikan body milik request lain. `internal/semanticcache/key.go` kini
+   hashed seluruh payload blok (teks, `image_url`, `file_data`, baik jalur typed
+   maupun `[]any`), diuji dengan dua gambar berbeda yang kini menghasilkan key
+   berbeda.
+2. **TTL janitor tidak pernah memangkas apa pun.** Expiry dievaluasi di SQL
+   (`WHERE storedAt < ?`), jadi itu perbandingan *string* — dan `time.RFC3339`
+   memotong ke detik, sehingga baris yang ditulis pada detik yang sama dengan
+   cutoff menghasilkan string identik, tidak pernah_lt, dan tidak pernah
+   terhapus. `TestPersistentLRUStore_Janitor` memang gagal di branch ini.
+   `storedAt` kini ditulis dengan lebar tetap nanosecond
+   (`internal/semanticcache/persistent_store.go`), pola yang sama dengan
+   `db.rotationTimestampFormat` dan alasan yang sama; nilai second-precision dari
+   build lama tetap terbaca (eksit satu detik, wajar untuk cache).
+3. **Dashboard membaca instance cache yang berbeda dari engine.**
+   `SetupServerRouter` menempelkan dashboard ke handler milik `/version`, yang
+   dibangun sebelum ada traffic, jadi `PersistentStore`-nya punya LRU sendiri
+   yang tidak pernah terisi: `/api/cache/entries` melaporkan 0 entri padahal
+   engine melayani hit, dan `DELETE /api/cache` menghapus baris SQLite tanpa
+   menghentikan engine. `SetupRoutes` kini mengembalikan handler engine-nya dan
+   grup dashboard dipasang pada instance itu.
+4. **Filter RTK merusak JSON yang struktur.** `gh.json`, `kubectl.json`, dan
+   `git-diff.json` memakai negative lookahead Perl yang RE2 tolak, sehingga
+   `compileRegexSafe` membuangnya diam-diam dan filter termuat dengan pola
+   kurang. Lebih jauh, karena `MatchFilter` dipanggil dengan command kosong, hanya
+   content pattern yang tersisa — body `gh api` yang memuat URL github.com cocok
+   ke `gh.json` lalu dilewatkan filter baris, dan `json-output` ikut membuang
+   baris data sehingga JSON-nya rusak. Pola lookahead diganti bentuk yang valid
+   RE2 dan `MatchFilter` kini mengembalikan `nil` untuk dokumen JSON utuh.
+5. **Sisipan kompresi live tidak pernah mengisi `Model`.** `InsertCompressionAnalytics`
+   dipanggil tanpa `Model`, sementara query `ByModel` memfilter
+   `model != ''`, jadi seluruh breakdown per-model di dashboard kosong.
+   Test lama tidak menangkap ini karena fixture-nya juga tidak mengeset `Model`.
+6. **`classifyHistoricalMode` punya cabang mati.** Predikatnya
+   `(savedTokens > 0 && personaCount > 0) || personaCount > 1` menyederhanakan
+   diri menjadi `personaCount > 0`, sehingga `caveman`/`adhd`/`ponytail` tak
+   pernah tercapai dan mode backfill selalu `stacked`, berbeda dari
+   `resolveCompressionMode` yang dipakai jalur live.
+
+Verifikasi: `go build ./...`, `go vet ./...`, `go test ./...` hijau,
+`go test -tags=integration ./internal/integration/...` hijau, `bun test` 238/238,
+`bun run build`, dan `bun run ratchet:svelte` (0 unresolved, 88 = baseline).
+
+### 🐛 Ollama Cloud dialed `localhost:11434` — every cloud key 502'd before leaving the machine
+
+Gejala: `upstream error: ForwardOpenAI upstream: forward to
+http://localhost:11434/v1/chat/completions: ... dial tcp 127.0.0.1:11434:
+connect: connection refused` pada provider `ollama` (#192). `/v1/models`
+terlihat normal karena daftar model berasal dari katalog, bukan dari address
+yang benar-benar di-dial.
+
+Akar masalah bukan hanya di registry. Dua hal terpisah:
+
+1. **Entry registry `ollama` menunjuk ke daemon self-hosted.** Id `ollama`
+   adalah Ollama **Cloud** — API resmi di ollama.com, dikunci API key dari
+   dashboard — tapi `BaseURL`-nya `http://localhost:11434/v1/chat/completions`,
+   jadi setiap koneksi cloud mendial port loopback yang hanya ada di mesin yang
+   menjalankan `ollama serve`. Upstream memisahkannya juga: registry
+   `ollama.js` mendial `ollama.com`, dan hanya `ollama-local.js` yang menunjuk
+   11434. Sekarang `ollama` → `https://ollama.com/v1/chat/completions`, dan
+   `ollama-local` tetap di 11434 (#192).
+
+   Lane OpenAI-compatible `/v1` di ollama.com diverifikasi live: path tak
+   dikenal 404, `/v1/models` 200, dan API key salah dapat 401 dengan body error
+   berbentuk OpenAI — jadi tidak perlu port translator native untuk perbaikannya.
+
+2. **`providerSpecificData.baseUrl` dibuang, dan host telanjang tidak punya
+   route.** Dashboard menyimpan override endpoint per-koneksi di
+   `providerSpecificData.baseUrl`, sedangkan `ConnectionData.BaseURL` hanya
+   membawa key `baseUrl` tingkat atas — override di-parse lalu dibuang, dan
+   request jatuh ke default registry (yaitu loopback tadi). Second: field host
+   Ollama Local diisi sebagai host telanjang (`http://192.168.1.10:11434`), dan
+   host telanjang tidak menamai route, jadi POST mendarat di root server.
+   Override kini di-hidrate di `getBestConnection` (hanya bila key tingkat atas
+   kosong, jadi penulisan lama menang) dan melengkapi route chat lewat helper
+   `chatCompletionsURL`, yang tidak menyentuh URL yang sudah menamai route —
+   `/v1`, `/v1beta`, dan `/messages` tetap apa adanya.
+
+Test: `internal/handlers/chat/ollama_routing_test.go` (registry tidak boleh
+dial loopback, cloud dan local tidak boleh berbagi address, tabel
+`chatCompletionsURL`, hidrasi override, dan request yang benar-benar mendarat
+di upstream) plus `internal/integration/ollama_routing_test.go` (katalog dan
+proxy lewat router produksi). Semuanya dicek mutasi: mengembalikan `ollama` ke
+11434, atau menghapus hidrasi, membuat masing-masing test gagal dengan gejala
+aslinya.
+
+Catatan: `ollama-local` tetap tanpa katalog model statis — upstream juga begitu,
+modelnya ditemukan live dari daemon (`/api/tags`). Itu kekosongan terpisah,
+bukan bagian #192.
 
 ## [v1.9.10-exp.3] - 2026-10-07
 

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"strings"
 
 	"9router/proxy/internal/fastjson"
@@ -40,19 +41,20 @@ func BuildCacheKey(sessionID string, req *translator.OpenAIRequest) string {
 			h.Write([]byte(v))
 		case []translator.OpenAIContentBlock:
 			for _, block := range v {
-				if block.Type == "text" {
-					h.Write([]byte(block.Text))
-				}
+				writeContentBlock(h, block.Type, block.Text, imageURLOf(block), fileDataOf(block))
 			}
 		case []any:
 			for _, el := range v {
-				if bm, ok := el.(map[string]any); ok {
-					if bm["type"] == "text" {
-						if t, ok := bm["text"].(string); ok {
-							h.Write([]byte(t))
-						}
-					}
+				bm, ok := el.(map[string]any)
+				if !ok {
+					continue
 				}
+				blockType, _ := bm["type"].(string)
+				text, _ := bm["text"].(string)
+				// Any other payload (image_url, file, input_audio, …) must reach
+				// the hash too: two requests that differ only in their image bytes
+				// would otherwise share a key and serve each other's responses.
+				writeContentBlock(h, blockType, text, nestedString(bm, "image_url", "url"), nestedString(bm, "file", "file_data"))
 			}
 		}
 		h.Write([]byte("\n"))
@@ -80,6 +82,56 @@ func BuildCacheKey(sessionID string, req *translator.OpenAIRequest) string {
 	}
 
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// writeContentBlock folds one content block into the cache-key hash. Every
+// payload the block carries reaches the hash under a type-tagged label, so an
+// image or file block is as discriminating as its text — hashing text alone
+// makes two multimodal requests that differ only in their image bytes collide.
+func writeContentBlock(h io.Writer, blockType, text, imageURL, fileData string) {
+	h.Write([]byte("block:"))
+	h.Write([]byte(blockType))
+	h.Write([]byte(":"))
+	switch blockType {
+	case "text", "":
+		h.Write([]byte(text))
+	default:
+		h.Write([]byte(text))
+		h.Write([]byte("|img="))
+		h.Write([]byte(imageURL))
+		h.Write([]byte("|file="))
+		h.Write([]byte(fileData))
+	}
+	h.Write([]byte("\n"))
+}
+
+// imageURLOf returns the inline image URL carried by a typed content block, or
+// "" when it carries none.
+func imageURLOf(block translator.OpenAIContentBlock) string {
+	if block.ImageUrl == nil {
+		return ""
+	}
+	return block.ImageUrl.URL
+}
+
+// fileDataOf returns the inline file payload carried by a typed content block,
+// or "" when it carries none.
+func fileDataOf(block translator.OpenAIContentBlock) string {
+	if block.File == nil {
+		return ""
+	}
+	return block.File.FileData
+}
+
+// nestedString reads obj[key][subkey] as a string, returning "" when either
+// level is absent or not a string.
+func nestedString(obj map[string]any, key, subkey string) string {
+	inner, ok := obj[key].(map[string]any)
+	if !ok {
+		return ""
+	}
+	s, _ := inner[subkey].(string)
+	return s
 }
 
 // ExtractPromptText extracts a normalized text representation of the prompt.

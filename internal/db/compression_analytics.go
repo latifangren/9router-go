@@ -790,20 +790,25 @@ func classifyHistoricalMode(data string, savedTokens int) string {
 		personaCount++
 	}
 
-	if (savedTokens > 0 && personaCount > 0) || personaCount > 1 {
-		return "stacked"
+	// A persona is present whenever any of the three prompts matched. "stacked"
+	// is RTK compression applied *on top of* a persona prompt, so it needs both
+	// savings and a persona; a lone persona prompt with no measurable savings is
+	// classified by the persona alone.
+	if personaCount > 0 {
+		if savedTokens > 0 {
+			return "stacked"
+		}
+		switch {
+		case hasCaveman:
+			return "caveman"
+		case hasADHD:
+			return "adhd"
+		case hasPonytail:
+			return "ponytail"
+		}
 	}
 	if savedTokens > 0 {
 		return "rtk"
 	}
-	if hasCaveman {
-		return "caveman"
-	}
-	if hasADHD {
-		return "adhd"
-	}
-	if hasPonytail {
-		return "ponytail"
-	}
-	return "rtk"
+	return "none"
 }

@@ -256,6 +256,32 @@ func IsFilterEnabled(f *RTKFilter, cfg RTKConfig) bool {
 	return isCatEnabled(cfg, f.Category)
 }
 
+// A JSON document must never be rewritten by a prose filter. Every filter
+// reduces its input line by line, so applying one to structured output silently
+// deletes the data lines and leaves unparseable JSON behind. The per-filter
+// command patterns cannot cover it, because MatchFilter is called with an empty
+// command (rtk.go:393) and only the content patterns remain — a `gh api` body
+// containing a github.com URL matches gh.json's first content pattern and is
+// filtered as if it were prose.
+//
+// Go's RE2 has no negative lookahead, so the two filters that document this
+// exclusion upstream (gh, kubectl) cannot express it as a single pattern.
+// Detection is therefore done on the payload itself: anything that parses as
+// JSON is passed through untouched.
+
+// reStructuredJSON matches a complete JSON document spanning the whole input.
+var reStructuredJSON = regexp.MustCompile(`\A\s*[[{][\s\S]*[\]}]\s*\z`)
+
+// isStructuredOutput reports whether text is a single JSON document, i.e. the
+// kind of payload a line-based filter would corrupt.
+func isStructuredOutput(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if !reStructuredJSON.MatchString(trimmed) {
+		return false
+	}
+	return json.Valid([]byte(trimmed))
+}
+
 // MatchFilter finds the highest priority matching enabled filter for the given text or command.
 func MatchFilter(text string, command string, cfg RTKConfig) *RTKFilter {
 	filters := LoadFilters()
@@ -275,6 +301,16 @@ func MatchFilter(text string, command string, cfg RTKConfig) *RTKFilter {
 		}
 	}
 
+	// A JSON document is never line-filtered. RE2 has no negative lookahead, so
+	// the filters that document this exclusion upstream (gh, kubectl) cannot
+	// express it as a pattern; detection is done on the payload itself. Every
+	// filter reduces its input line by line, and json-output included — its
+	// includePatterns keep structural lines and a few named keys, so applying it
+	// deletes every other data line and the result no longer parses.
+	if isStructuredOutput(text) {
+		return nil
+	}
+
 	// Phase 2: Try pattern matching against the content
 	for _, f := range filters {
 		if !IsFilterEnabled(f, cfg) {
@@ -291,7 +327,8 @@ func MatchFilter(text string, command string, cfg RTKConfig) *RTKFilter {
 		}
 	}
 
-	// Phase 3: Fall back to generic-output if enabled
+
+	// Fall back to generic-output if enabled
 	for _, f := range filters {
 		if f.ID == "generic-output" && IsFilterEnabled(f, cfg) {
 			return f
@@ -300,6 +337,7 @@ func MatchFilter(text string, command string, cfg RTKConfig) *RTKFilter {
 
 	return nil
 }
+
 
 // ApplyRTKFilter applies the filter rules to text.
 func ApplyRTKFilter(f *RTKFilter, text string, maxLinesLimit int) (string, []string) {

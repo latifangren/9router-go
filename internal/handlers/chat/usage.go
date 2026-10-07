@@ -222,6 +222,7 @@ func (h *ChatHandler) logUsage(info *UsageLogInfo, usage *translator.OpenAIUsage
 		_ = h.Repo.InsertCompressionAnalytics(context.Background(), db.CompressionAnalyticsRecord{
 			Timestamp:              now.Format(time.RFC3339),
 			Provider:               info.Provider,
+			Model:                  info.Model,
 			Mode:                   mode,
 			OriginalTokens:         info.OriginalInputTokens,
 			CompressedTokens:       info.OriginalInputTokens - info.SavedTokens,

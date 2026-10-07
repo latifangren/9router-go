@@ -7,7 +7,7 @@
   "match": {
     "outputTypes": ["kubectl"],
     "commands": [
-      "^kubectl\\s+(?:get|describe|apply|delete|rollout|events?)(?!.*(?:-o|--output)(?:\\s+|=)(?:json|yaml|go-template|jsonpath|template|name))\\b"
+      "^kubectl\\s+(?:get|describe|apply|delete|rollout|events?)\\b"
     ],
     "patterns": [
       "NAME\\s+READY\\s+STATUS",

@@ -539,7 +539,6 @@
           {/if}
         </div>
         </div>
-      </div>
 
       <!-- Modal Footer -->
       <div class="px-6 py-3 border-t border-border bg-surface-2 flex justify-end">
