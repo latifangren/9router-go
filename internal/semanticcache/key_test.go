@@ -70,6 +70,73 @@ func TestBuildCacheKey_SeparatesUntypedImagePayloads(t *testing.T) {
 	}
 }
 
+// A parameter that changes the answer must change the key. Two requests whose
+// prompts are byte-identical but that pin different max_tokens cannot share a
+// cached body: the second caller would silently receive the first one's shorter
+// completion.
+func TestBuildCacheKey_SeparatesResponseShapingParameters(t *testing.T) {
+	base := func() *translator.OpenAIRequest {
+		return &translator.OpenAIRequest{
+			Model:    "gpt-4o",
+			Messages: []translator.OpenAIMessage{{Role: "user", Content: "hello"}},
+		}
+	}
+	withInt := func(v int) *translator.OpenAIRequest {
+		r := base()
+		r.MaxTokens = &v
+		return r
+	}
+
+	tests := []struct {
+		name string
+		a, b *translator.OpenAIRequest
+	}{
+		{"max_tokens differs", withInt(16), withInt(4096)},
+		{"max_tokens set versus omitted", withInt(16), base()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if BuildCacheKey("", tt.a) == BuildCacheKey("", tt.b) {
+				t.Fatal("requests that produce different completions share a cache key")
+			}
+		})
+	}
+
+	maxCompletion := func(v int) *translator.OpenAIRequest {
+		r := base()
+		r.MaxCompletionTokens = &v
+		return r
+	}
+	if BuildCacheKey("", maxCompletion(16)) == BuildCacheKey("", maxCompletion(4096)) {
+		t.Error("max_completion_tokens does not reach the cache key")
+	}
+
+	effort := func(e string) *translator.OpenAIRequest {
+		r := base()
+		r.ReasoningEffort = e
+		return r
+	}
+	if BuildCacheKey("", effort("low")) == BuildCacheKey("", effort("high")) {
+		t.Error("reasoning_effort does not reach the cache key")
+	}
+
+	parallel := func(v bool) *translator.OpenAIRequest {
+		r := base()
+		r.ParallelToolCalls = &v
+		return r
+	}
+	if BuildCacheKey("", parallel(true)) == BuildCacheKey("", parallel(false)) {
+		t.Error("parallel_tool_calls does not reach the cache key")
+	}
+
+	// A request that changes nothing must keep producing the same key, or the
+	// cache would never hit.
+	if BuildCacheKey("", base()) != BuildCacheKey("", base()) {
+		t.Error("cache key is not stable for identical requests")
+	}
+}
+
 // TTL expiry is evaluated in SQL as a string comparison on storedAt. Plain
 // RFC3339 truncates to whole seconds, so a row written in the same second as the
 // cutoff compares equal, never sorts before it, and is never deleted — the

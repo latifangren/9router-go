@@ -26,7 +26,7 @@
 - **Fallback Creation Tokens**: Menambahkan formula fallback di `internal/db/cache_analytics.go` untuk menangkap token pembuatan prompt cache pada provider Antigravity/Gemini yang tidak mengirim key eksplisit (`cache_creation_input_tokens`).
 - **Background TTL Janitor**: Menambahkan ticker background berkala di `internal/semanticcache/persistent_store.go` untuk membersihkan entri kadaluarsa di RAM dan SQLite secara otomatis, mencegah database membengkak seiring waktu.
 
-### 🐛 Enam cacat yang ditemukan saat review PR #193 (sudah diperbaiki di branch ini)
+### 🐛 Delapan cacat yang ditemukan saat review PR #193 (sudah diperbaiki di branch ini)
 
 1. **Cache key multimodal bertabrakan — dua klien saling menerima respons.**
    `BuildCacheKey` hanya hashed blok `type == "text"`, sehingga pesan berisi
@@ -69,6 +69,21 @@
    diri menjadi `personaCount > 0`, sehingga `caveman`/`adhd`/`ponytail` tak
    pernah tercapai dan mode backfill selalu `stacked`, berbeda dari
    `resolveCompressionMode` yang dipakai jalur live.
+7. **Cache key mengabaikan parameter yang mengubah jawaban.**
+   `BuildCacheKey` hanya hashed model, messages, tools, tool_choice, dan
+   temperature. `max_tokens`, `max_completion_tokens`, `reasoning_effort`, dan
+   `parallel_tool_calls` semuanya mengubah completion sementara prompt-nya
+   byte-identik, jadi request kedua menerima body milik request pertama —
+   jawaban lebih pendek dari yang diminta, tanpa error. Semuanya kini masuk hash.
+8. **Refresh OAuth menimpa kredensial yang sengaja dipilih.**
+   Cabang "token belum kedaluwarsa" mengembalikan `oauthData.AccessToken` dari
+   baris koneksi, bukan token yang diberikan pemanggil, dan pemanggilnya
+   (`fallback.go`) melakukan `apiKey = rekey`. Untuk Kiro itu merusak: `resolveProviderAuthToken`
+   memang memilih `apiKey` untuk koneksi `authMethod: "api_key"` meski
+   `accessToken` tersedia (upstream `kiro.js buildHeaders` hanya memakai apiKey
+   di mode itu), dan yang lain menjawab 403 "The bearer token included in the
+   request is invalid." Cabang tersebut kini mengembalikan kredensial pemanggil
+   apa adanya.
 
 Verifikasi: `go build ./...`, `go vet ./...`, `go test ./...` hijau,
 `go test -tags=integration ./internal/integration/...` hijau, `bun test` 238/238,

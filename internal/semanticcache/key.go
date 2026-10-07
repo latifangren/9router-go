@@ -81,7 +81,34 @@ func BuildCacheKey(sessionID string, req *translator.OpenAIRequest) string {
 		h.Write([]byte(fmt.Sprintf("temp:%.4f\n", *req.Temperature)))
 	}
 
+	// Parameters that shape the completion. Any of these can change the answer
+	// while leaving the prompt byte-identical, so a key that omits them serves
+	// a stale body: a request asking for max_tokens 16 must not be answered with
+	// the body produced for max_tokens 4096.
+	writeIntParam(h, "max_tokens", req.MaxTokens)
+	writeIntParam(h, "max_completion_tokens", req.MaxCompletionTokens)
+	if req.ParallelToolCalls != nil {
+		h.Write([]byte(fmt.Sprintf("parallel_tool_calls:%t\n", *req.ParallelToolCalls)))
+	}
+	if req.ReasoningEffort != "" {
+		h.Write([]byte("reasoning_effort:"))
+		h.Write([]byte(req.ReasoningEffort))
+		h.Write([]byte("\n"))
+	}
+
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// writeIntParam folds an optional integer request parameter into the hash. An
+// absent parameter is not written at all, so a request that omits the field
+// keeps a different key from one that pins it to the same number.
+func writeIntParam(h io.Writer, label string, v *int) {
+	if v == nil {
+		return
+	}
+	h.Write([]byte(label))
+	h.Write([]byte(":"))
+	h.Write([]byte(fmt.Sprintf("%d\n", *v)))
 }
 
 // writeContentBlock folds one content block into the cache-key hash. Every
