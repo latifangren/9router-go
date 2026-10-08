@@ -2,7 +2,34 @@
 
 ## [Unreleased]
 
-### 🐛 Lonjakan RAM idle ~100 MB+ setelah pruning `requestDetails`
+## [v1.9.11-exp.2] - 2026-10-08
+
+Rilis eksperimental ini menyusul `main` yang sudah bergerak tiga commit
+daripada tag `v1.9.11-exp.1`. Ciri eksperimental exp.1 tidak berubah: seluruh
+Request Details / Cache & Compression Analytics / semantic cache / RTK modes
+dari exp.1 tetap ada — yang baru adalah perbaikan dan fitur kecil yang masuk ke
+`main` setelah tag itu terbit.
+
+### 🔘 Tombol Refresh per-baris untuk menguji satu akun (bukan satu-by-one sweep)
+
+Kartu Connections hanya menawarkan sweep satu-by-one untuk seluruh daftar.
+Satu baris dengan badge error yang basi memaksa operator menjalankan seluruh
+sweep — atau membuka modal edit — hanya untuk memeriksa satu akun. Sekarang
+setiap baris punya aksi **Refresh** yang memprobe koneksi itu lewat endpoint
+test yang sudah ada (`api.testConnection`) dan menulis hasilnya ke state badge
+satu-by-one yang sama, jadi indikator testing/success/failed di baris itu tetap
+berasal dari satu sumber (#196).
+
+Guard saat ini sama seperti sweep-nya: klik pada koneksi yang sedang diuji,
+atau ketika sweep one-by-one sedang berjalan, diabaikan. Tombol disabled selama
+status baris itu `testing` atau sweep aktif.
+
+Catatan rilis: PR #190 (OAuth refresh singleflight, email masking, backend test
+coverage) dan PR #193 masih terbuka dan belum ikut build ini — keduanya belum
+tergabung ke `main`, dan CI keduanya merah. Yang ikut di sini hanya yang sudah
+di `main` pada saat tag dibuat.
+
+### 🐛 Lonjakan RAM idle ~100 MB+ setelah pruning `requestDetails` (#197)
 
 - **Gejala**: sejak `db.StartRetentionLoop` masuk (#187, ikut rilis di v1.9.11-exp.1),
   working set proses melonjak dari ~28 MB ke ~100 MB+ dan tidak pernah kembali,
@@ -30,10 +57,20 @@
   nilai dikembalikan ke `-64000` (terverifikasi: test gagal dengan
   "pooled page cache = 252 MB").
 
-### 🐛 Tombol "Add Custom Provider" kembali terpecah di v1.9.11-exp.1
+### 🐛 Tombol "Add Custom Provider" kembali terpecah di v1.9.11-exp.1 (#195)
 
+- **Gejala**: di build exp.1 tombolnya terpecah lagi — `ProvidersOverviewGrid`
+  menampilkan dua tombol terpisah (`Add Anthropic Compatible` dan
+  `Add OpenAI Compatible`) yang #182/#183 sudah satukan, sehingga dialog tunggal
+  yang dipulihkan #183 hilang tepat pada build yang pertama menerbitkannya.
 - **Penyebab**: `736136c` — commit pertama PR #185 di branch `feat/keirouter-port`, dibuat 12 menit setelah `079de66` (#183) — menulis ulang `AddCompatibleNodeModal.svelte`, `ConnectionsView.svelte`, `ProvidersOverviewGrid.svelte`, dan `MediaKindView.svelte` ke kondisi sebelum #182/#183, sehingga membatalkan dialog tunggal. Keempat file byte-identik dengan `d729b43` (sebelum penggabungan), terbukti lewat `git rev-parse`. PR #185 sendiri tidak menyentuh fitur ini: revert-nya ikut ter-carry oleh squash merge `9b553e7`.
 - **Perbaikan**: keempat file dipulihkan ke versi unified; `ProvidersOverviewGrid` kembali ke satu tombol **Add Custom Provider** dengan switch Provider Type di dalam dialog (field yang sudah diisi pengguna tetap utuh saat ganti protokol); dialog Custom Embedding tetap `allowedTypes={['custom-embedding']}` sehingga hanya menawarkan satu opsi. Import `AddCompatibleNodeModal` yang tertinggal di `ProviderDetailView.svelte` ikut dibersihkan.
+
+Verifikasi pada tag ini: `go build ./...`, `go vet ./...`, `go test ./...`,
+`go test -count=1 -tags=integration ./internal/integration/...` (78.7 s), dan
+`bun run ratchet:svelte` (0 unresolved, 88 = baseline).
+
+## [v1.9.11-exp.1] - 2026-10-08
 
 ### 👤 Paritas Request Details Ala OmniRoute (Kolom Akun, Combo, Protokol, & Modal Detail)
 
