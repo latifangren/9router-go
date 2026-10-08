@@ -1,6 +1,53 @@
 # Changelog
 
-## [Unreleased]
+## [v1.9.11-exp.4] - 2026-10-08
+
+Rilis eksperimental ini keluar dari `main` langsung. `main` dan `dev` sekarang
+identik (tree `e0e62c3` di keduanya), jadi garis eksperimental tidak lagi perlu
+merge kedua-duanya: seluruh isi `[Unreleased]` yang dipindahkan ke bawah ini
+adalah isi `main` pada saat tag dibuat.
+
+Dibanding `v1.9.11-exp.3`, ini yang berubah:
+
+  #214  halaman Cache Analytics tidak lagi 503. Agregasi prompt cache
+        dipindai sekali lalu dilipat di Go, bukan empat statement yang
+        masing-masing menyisir seluruh `usageHistory` — 35,5 s → 289 ms lewat
+        HTTP nyata pada ledger 82.143 baris. Bug lama ikut ketahuan, bukan
+        berasal dari rewrite itu: `cachedRequests` di query trend selalu nol
+        sejak port OmniRoute (#110), karena perbandingan JSON-nya berada di
+        dalam `AND` sehingga `json_valid` menutup kedua cabang dan justru
+        memfilter baris yang punya cache token. Test yang menjaganya sudah ada.
+  #206  429 yang habis hanya untuk satu model tidak lagi mengunci seluruh
+        akun; model lain yang sehat di koneksi itu tetap bisa dipakai, dan
+        errornya tetap tercatat untuk dashboard.
+  #213  dokumentasi: setiap PR di-merge ke `main`, `dev` hanya untuk integrasi.
+  #212  `/providers/muse.png` tidak lagi 404, dan peringatan autofocus di
+        console halaman login hilang.
+  #208  koneksi aktif tidak lagi ditandai error di statistik provider hanya
+        karena ada soft warning.
+  #211  kontrol Cache & Compression Analytics pindah ke dropdown menu
+        (`SectionMenu`), menggantikan baris pill `SectionNav` (#209).
+  #204  Cache & Compression Analytics menjadi section halaman Usage (#200).
+
+Yang **tidak** ikut: PR #190 (OAuth refresh singleflight, email masking,
+backend test coverage) masih terbuka dan belum ada di `main`, jadi belum ada
+di build ini.
+
+Kanal tetap eksperimental: GitHub Release PRERELEASE, docker `:exp`,
+`:1.9-exp`, `:1.9.11-exp.4`. `version.json` tetap di 1.9.10 — graduate dengan
+`./scripts/bump-version.sh 1.9.11` saat stabil.
+
+Verifikasi pada tag ini: `go build ./...`, `go vet ./...`, `go test ./...`
+(semua lulus), `go test -count=1 -tags=integration ./internal/integration/...`
+(86,5 s, lulus), `bun test` (266 lulus), `bun run build`, dan
+`bun run ratchet:svelte` (0 unresolved, 84 = baseline).
+
+Catatan: `CHANGELOG.md` pada tag `v1.9.11-exp.3` terduplikasi berat — 14.077
+baris dengan 43 heading versi yang sama muncul tiga kali, akibat resolusi
+merge yang menggabungkan salinan changelog dari kedua sisi. `main` dan build ini
+bersih (4.808 baris). Damanya pada tag itu kosmetik saja: bagian
+`## [v1.9.11-exp.3]` ada di paling atas, jadi `awk` di workflow release tetap
+mengambil utuh bagian yang benar.
 
 ### 🐛 Halaman Cache Analytics balas 503 — agregasi 35 detik untuk 82.143 baris
 
@@ -4806,3 +4853,5 @@ An audit after the wiring found paths that go through neither `sseStream` nor `h
 ## [v1.0.2] — Previous
 
 - Initial release with OpenAI/Claude SSE proxy, combo fallback, token savers, benchmark results.
+
+## [Unreleased]
