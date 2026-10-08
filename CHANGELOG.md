@@ -2,6 +2,52 @@
 
 ## [Unreleased]
 
+## [v1.9.11-exp.3] - 2026-10-08
+
+Rilis eksperimental ini menyatukan `main` ke garis eksperimental, sama seperti
+exp.1 dan exp.2, lalu menambah satu perbaikan dashboard. Yang masuk dari `main`:
+
+  #203  halaman **Endpoint & Key** jadi satu-satunya tempat mengelola token
+        klien (tab API Keys duplikat dihapus), tabel bergaya KeiRouter dengan
+        status/policy/created dalam satu sel multi-baris, tombol show/hide dan
+        copy diperbaiki, dan hashed stored key dimatikan (#199).
+  #202  cooldown error di loop fallback tidak lagi hilang jadi fallback diam-diam
+        ke akun berikutnya (#201).
+  #197  page cache SQLite 8 MB per koneksi, bukan 64 MB; working set pada
+        binary dan DB yang sama turun dari ~100 MB.
+  #196  tombol Refresh per-baris di Connections — menguji satu akun dari
+        barisnya sendiri, bukan sweep seluruh daftar.
+  #198  action bar Connections berhenti membungkus, dan logika probe dipakai
+        bersama.
+  #195  dialog Add Custom Provider unified yang sempat hilang di exp.1 dipulihkan.
+  #185  per-key governance, credential vault, dan guardrails (#176).
+
+Dari garis `dev` (PR #193), yang sudah ada di exp.2 dan tetap ada di sini:
+Request Details, Cache & Compression Analytics, semantic cache, dan mode
+RTK/Caveman/Ponytail/ADHD.
+
+### 📊 Cache & Compression Analytics pindah jadi section halaman Usage (#200)
+
+Cache Analytics dan Compression Analytics bukan lagi dua entri sidebar
+mandiri; keduanya menjadi section dari halaman **Usage**, bersama Overview dan
+Details. Strip navigasi `inline-flex rounded-xl p-1` diganti dropdown
+(`SectionNav.svelte`) karena empat label tidak muat di layar 374px, dan
+dropdown periode yang sebelumnya hanya ada di Overview sekarang dipakai section
+Compression juga (`PeriodSelect.svelte`) — dengan `showCustom={false}` di sana,
+karena `/api/analytics/compression` hanya mengenali `24h|7d|30d|all` dan akan
+membalas window lain dengan `24h`.
+
+Kartu ROI Speed di Compression Analytics sebelumnya berada di luar
+`grid lg:grid-cols-7`, jadi tidak pernah menjadi sel grid dan menyisakan kolom
+kosong di layar lebar; sekarang ketujuhnya di dalam grid `2/3/4/7` kolom.
+Path lama (`/dashboard/cache`, `/dashboard/analytics/compression`) tetap
+resolve ke section yang sama, sehingga tab yang terbuka saat upgrade tidak
+mendarat di halaman lain.
+
+Channel tetap experimental: GitHub Release PRERELEASE, docker `:exp` /
+`:1.9-exp` / `:1.9.11-exp.3`. `version.json` tetap di 1.9.10 — graduate via
+`./scripts/bump-version.sh 1.9.11` saat channel stabil.
+
 ### 🔑 issue #199: halaman API Key menyatu ke Endpoint & Key, secret bisa di-reveal lagi
 
 Halaman **Endpoint & Key** sekarang jadi satu-satunya tempat mengelola token klien: tab
@@ -4674,7 +4720,8 @@ An audit after the wiring found paths that go through neither `sseStream` nor `h
 
 ## [v1.0.2] — Previous
 
-- Initial release with OpenAI/Claude SSE proxy, combo fallback, token savers, benchmark results.log
+- Initial release with OpenAI/Claude SSE proxy, combo fallback, token savers, benchmark results.
+log
 
 ## [Unreleased]
 
