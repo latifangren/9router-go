@@ -1,5 +1,92 @@
 # Changelog
 
+## [v1.9.11-exp.6] - 2026-10-09
+
+Rilis eksperimental ini keluar dari `main` (`4dbd63d`) tanpa merge. Dibanding
+`v1.9.11-exp.5` (`e71befb`) tiga commit yang baru, dan seluruh isi
+`[Unreleased]` yang dipindahkan ke bawah ini adalah isi `main` pada saat tag
+dibuat:
+
+  #219  error model-gated tidak lagi mengunci seluruh akun (#218). Pada
+        provider multi-model (OpenCode Zen, Antigravity) satu model berbayar
+        yang gagal — `402 Insufficient account funds`, atau `401 Model ... is
+        not supported` — memicu `LockConnectionRateLimit` yang menulis
+        `rateLimitedUntil` di level akun selama ~2 menit. Karena loop fallback
+        mencoba seluruh koneksi provider tersebut, satu model yang gagal
+        mematikan model gratis yang sehat di akun yang sama
+        (`space-bunny-free`, `mimo-v2.6-flash-free`) dengan 502 "no available
+        connections (all in cooldown)".
+
+        `isModelScopedQuotaError` menjadi `isModelScopedError`, di-gate positif:
+        status dibatasi 400/401/402/403 (sebuah 5xx yang sekadar berkata "not
+        supported" adalah kegagalan node, bukan gerbang model), dan body harus
+        menyebut model yang diminta atau membawa pesan dana. Kegagalan
+        autentikasi akun sungguhan tetap mengunci akun global. Status 402
+        masuk ke `RetryableStatusCodes`.
+
+        Bentuk gate ini datang dari review: versi pertama memakai daftar-siyah
+        tujuh frasa, sehingga apa pun di luar daftar itu — termasuk 402 credit
+        Grok Build, `Token type is not supported`, dan 5xx yang menyebut "not
+        supported" — ikut diperlakukan model-scoped dan kehilangan cooldown
+        akunnya, berkontradiksi dengan `connection_probe.go` yang memang
+        menyebut 402 sebagai urusan akun. Diuji ulang dengan probe yang sama
+        di branch itu dan di `main`; keenam kasus yang regresi sudah pulih.
+
+  #190  OAuth refresh singleflight, masking email, dan cakupan test backend.
+        `refreshOAuthTokenIfExpired` / `forceRefreshOAuthToken` jalan di dalam
+        `singleflight.Group` per koneksi, jadi token kedaluwarsa berbiaya satu
+        round-trip hulu, bukan satu per request konkuren; kunci refresh paksa
+        diberi prefiks `"\x00"` yang tak mungkin terdapat pada id koneksi, dan
+        hasil tanpa token baru ditandai passthrough agar waiter tidak
+        mengadopsi token milik leader. Di sisi web, `maskEmail` +
+        `emailPrivacy` tersimpan di `localStorage['9router_mask_email']` dengan
+        toggle di Quota Tracker, Provider Detail, Media, Model picker,
+        Analytics topology, dan header Media — tujuh rute media sebelumnya
+        tidak punya jalan menuju masking. `EditConnectionModal` sekarang
+        memakai `formatEmailLabel` dan hanya mengirim nilai yang benar-benar
+        berubah, sehingga menyimpan perubahan prioritas tidak lagi menulis
+        `"l***m@gmail.com"` ke `providerConnections.name`.
+
+        Empat cacat ditemukan saat review dan sudah diperbaiki di commit
+        kedua: hasil refresher nil membuat panic (dilempar ulang singleflight ke
+        setiap waiter), guard write-back membandingkan field dengan mask turunan
+        sehingga masking yang dimatikan di jendela kedua menulis nama tersamar,
+        `functionResponse` tidak masuk daftar token quick-check pada
+        satu putaran Gemini, dan `maskEmail` tak pernah diuji dengan dua
+        alamat dalam satu label. Dua test envelope-unwrap kini memastikan kunci
+        envelope hilang, sehingga gagal kalau unwrap-nya jadi no-op.
+
+  #217  modal policy key tidak lagi kehilangan allowlist model (#216).
+        Allowlist tidak pernah di-fetch saat modal dibuka — daftar mulai kosong
+        dan hanya terisi setelah tombol "Load" ditekan, sehingga key yang
+        sebenar-nya dibatasi tetap terbaca "every model is allowed". Tombol
+        "Save Policy" juga hanya menulis kolom policy; allowlist ada di
+        endpoint terpisah yang tidak pernah dipanggil jalur simpan utama,
+        jadi pattern yang diketik diterima dengan 200 lalu hilang. Keduanya
+        menimpa: draft kosong dari bug pertama menimpa allowlist asli pada
+        simpan policy berikutnya. Sekarang allowlist di-fetch saat buka dan
+        ikut ditulis, dan penulisan dilewati hanya selagi fetch masih berjalan.
+        Commit kedua menutup lubang kedua: `hasLoadedModels` di-set di
+        `finally`, sehingga fetch yang GAGAL menandai daftar otoritatif saat
+        masih kosong — persis penghapusan data yang jadi tujuan bug ini. Flag
+        kini berarti "daftar benar-benar terbaca" dan penulisan menolak
+        berjalan tanpanya, sambil menjaga modal tetap terbuka dan menyebut
+        alasannya.
+
+        Backend tidak berubah dan sudah benar: `PUT/GET
+        /api/keys/{id}/models` sudah menulis dan membaca
+        `api_key_model_access` dengan benar.
+
+Channel tetap eksperimental: GitHub Release PRERELEASE, docker `:exp`,
+`:1.9-exp`, `:1.9.11-exp.6`. `version.json` tetap di 1.9.10 — graduate dengan
+`./scripts/bump-version.sh 1.9.11` saat stabil.
+
+Verifikasi pada tag ini: `go build ./...`, `go vet ./...`, `go test ./...
+-count=1`, `go vet -tags=integration ./internal/integration/...`,
+`go test -tags=integration -count=1 ./internal/integration/...` (72.0 s),
+`bun test` (277 pass), `bun run build`, `bun run ratchet:svelte` (0 unresolved,
+83 baseline).
+
 ## [Unreleased]
 
 ### 🐛 fix(chat): error model-gated (402 funds, 401 unsupported) tidak mengunci seluruh akun (#218)
