@@ -202,12 +202,15 @@ func (h *ChatHandler) refreshOAuthTokenIfExpired(connectionID, currentToken stri
 		if oauthData != nil {
 			projectID = oauthData.ProjectID
 		}
+		// The token is usable, so there is nothing to refresh. Hand back exactly the
+		// credential the caller passed in: resolveProviderAuthToken picked it
+		// deliberately, and for providers like Kiro that choice is load-bearing —
+		// upstream (open-sse/executors/kiro.js buildHeaders) uses the apiKey for
+		// `authMethod: "api_key"` connections even when an accessToken is present,
+		// and sending the other one answers 403. Substituting the row's
+		// accessToken here would silently undo that decision on every request.
 		if oauthData == nil || oauthData.RefreshToken == "" || !oauthData.IsExpired() {
-			retToken := currentToken
-			if oauthData != nil && oauthData.AccessToken != "" {
-				retToken = oauthData.AccessToken
-			}
-			return oauthTokenResult{token: retToken, projectID: projectID}, nil
+			return oauthTokenResult{token: currentToken, projectID: projectID}, nil
 		}
 
 		// Try per-provider OAuth refresher first

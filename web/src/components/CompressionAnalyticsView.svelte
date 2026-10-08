@@ -1,13 +1,39 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, type Snippet } from 'svelte'
   import {
     api,
     type CompressionAnalyticsSummary,
   } from '../api/client'
   import { notifications } from '../lib/notifications'
   import { copyToClipboard } from '../lib/clipboard'
+  import PeriodSelect from './analytics/PeriodSelect.svelte'
+  import type { PeriodPreset } from './analytics/types'
+  import ActionsMenu from './analytics/ActionsMenu.svelte'
+  import MenuItem from './analytics/MenuItem.svelte'
+
+  interface Props {
+    /**
+     * The Usage section picker, rendered in the left of the header so this
+     * section's own controls sit beside it instead of in a row above
+     * (issue #209).
+     */
+    headerLeft?: Snippet
+  }
+
+  let { headerLeft }: Props = $props()
 
   type SinceOption = '24h' | '7d' | '30d' | 'all'
+
+  // The endpoint resolves exactly these four windows (see
+  // DashboardHandler.HandleGetCompressionAnalytics) and answers anything else
+  // with its 24h default, so the dropdown offers no custom input here: an
+  // arbitrary window would be accepted and then silently read as 24h.
+  const SINCE_OPTIONS: { value: PeriodPreset; label: string }[] = [
+    { value: '24h', label: 'Last 24 hours' },
+    { value: '7d', label: 'Last 7 days' },
+    { value: '30d', label: 'Last 30 days' },
+    { value: 'all', label: 'All time' },
+  ]
 
   let since = $state<SinceOption>('24h')
   let loading = $state(true)
@@ -27,10 +53,6 @@
     }
   }
 
-  function handleSinceChange(opt: SinceOption) {
-    since = opt
-    loadData()
-  }
   function exportJSON() {
     if (!stats) return
     const blob = new Blob([JSON.stringify(stats, null, 2)], { type: 'application/json' })
@@ -160,89 +182,55 @@
 </script>
 
 <div class="space-y-6">
-  <!-- Header & Controls -->
-  <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-    <div>
-      <h1 class="text-2xl font-bold tracking-tight text-text-main flex items-center gap-2">
-        <span class="material-symbols-outlined text-[26px] text-brand-500">compress</span>
-        Compression Analytics
-      </h1>
-      <p class="text-sm text-text-muted mt-1">
-        Prompt token reduction, engine execution efficiency, and savings telemetry.
-      </p>
-    </div>
+  <!-- Section picker and window selector on the left, the action menu on the
+       right, and what the section reports under them. Auto-refresh, manual
+       refresh, and both exports were four more controls in this row, which is
+       what made it wrap on a narrow window; they moved into one menu
+       (issue #209). -->
+  <div class="space-y-2">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex min-w-0 flex-wrap items-center gap-2">
+        {@render headerLeft?.()}
 
-    <div class="flex flex-wrap items-center gap-2">
-      <!-- Time Range Selector -->
-      <div class="flex items-center rounded-xl bg-surface-2 p-1 border border-border">
-        {#each ['24h', '7d', '30d', 'all'] as opt}
-          <button
-            type="button"
-            onclick={() => handleSinceChange(opt as SinceOption)}
-            class={`rounded-lg px-3 py-1.5 text-xs font-semibold uppercase transition-all ${
-              since === opt
-                ? 'bg-primary text-white shadow-sm'
-                : 'text-text-muted hover:text-text-main'
-            }`}
-          >
-            {opt}
-          </button>
-        {/each}
+        <!-- Window selector: the shared Usage dropdown, not a second strip -->
+        <PeriodSelect
+          value={since}
+          options={SINCE_OPTIONS}
+          showCustom={false}
+          busy={loading}
+          onChange={(next) => {
+            since = next as SinceOption
+            loadData()
+          }}
+        />
       </div>
 
-      <!-- Auto Refresh Toggle -->
-      <button
-        type="button"
-        onclick={() => (autoRefresh = !autoRefresh)}
-        class={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors ${
-          autoRefresh
-            ? 'border-brand-500/30 bg-brand-500/10 text-brand-500'
-            : 'border-border bg-surface text-text-muted hover:text-text-main'
-        }`}
-        title="Auto-refresh every 15s"
-      >
-        <span class="material-symbols-outlined text-[16px] {autoRefresh ? 'animate-spin' : ''}">sync</span>
-        Auto
-      </button>
-
-      <!-- Refresh Button -->
-      <button
-        type="button"
-        onclick={loadData}
-        disabled={loading}
-        class="flex items-center gap-1.5 rounded-xl border border-border bg-surface px-3 py-1.5 text-xs font-medium text-text-main hover:bg-surface-2 transition-colors disabled:opacity-50"
-      >
-        <span class="material-symbols-outlined text-[16px] {loading ? 'animate-spin' : ''}">refresh</span>
-        Refresh
-      </button>
+      <ActionsMenu label="Compression analytics actions">
+        <MenuItem
+          label="Auto-refresh"
+          icon="sync"
+          checkbox
+          note="15s"
+          pressed={autoRefresh}
+          onSelect={() => (autoRefresh = !autoRefresh)}
+        />
+        <MenuItem label="Refresh now" icon="refresh" disabled={loading} onSelect={loadData} />
+        <div class="my-1 border-t border-border-subtle" role="separator"></div>
+        <MenuItem label="Export CSV" icon="download" onSelect={exportCSV} />
+        <MenuItem label="Export JSON" icon="data_object" onSelect={exportJSON} />
+      </ActionsMenu>
     </div>
+
+    <p class="text-sm text-text-muted">
+      Prompt token reduction, engine execution efficiency, and savings telemetry.
+    </p>
   </div>
 
-      <!-- Export Buttons -->
-      <div class="flex items-center rounded-xl bg-surface-2 p-1 border border-border">
-        <button
-          type="button"
-          onclick={exportCSV}
-          class="rounded-lg px-2.5 py-1 text-xs font-medium text-text-muted hover:text-text-main transition-colors flex items-center gap-1"
-          title="Export CSV"
-        >
-          <span class="material-symbols-outlined text-[14px]">download</span>
-          CSV
-        </button>
-        <button
-          type="button"
-          onclick={exportJSON}
-          class="rounded-lg px-2.5 py-1 text-xs font-medium text-text-muted hover:text-text-main transition-colors flex items-center gap-1"
-          title="Export JSON"
-        >
-          <span class="material-symbols-outlined text-[14px]">data_object</span>
-          JSON
-        </button>
-      </div>
-
   <!-- Hero StatCards -->
-  <!-- Hero StatCards -->
-  <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-7">
+  <!-- Seven cards over track counts that divide them evenly. `lg:grid-cols-7`
+       with six cards inside left the ROI card outside the grid, where it spanned
+       nothing and left an empty column on wide screens (issue #200). -->
+  <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
     <!-- Total Requests -->
     <div class="rounded-2xl border border-border bg-surface p-4 shadow-sm flex flex-col justify-between">
       <div class="flex items-center justify-between text-text-muted">
@@ -328,10 +316,8 @@
         <p class="text-xs text-text-subtle mt-1 truncate">Estimated USD saved</p>
       </div>
     </div>
-  </div>
-
     <!-- ROI Speed -->
-    <div class="rounded-2xl border border-border bg-surface p-4 shadow-sm flex flex-col justify-between col-span-2 sm:col-span-1">
+    <div class="rounded-2xl border border-border bg-surface p-4 shadow-sm flex flex-col justify-between col-span-2 sm:col-span-1 lg:col-span-2 xl:col-span-1">
       <div class="flex items-center justify-between text-text-muted">
         <span class="text-xs font-medium uppercase tracking-wider">ROI Speed</span>
         <span class="material-symbols-outlined text-[20px] text-emerald-400">bolt</span>
@@ -345,6 +331,7 @@
         </p>
       </div>
     </div>
+  </div>
 
   <!-- Hourly Trend Chart -->
   <div class="rounded-2xl border border-border bg-surface p-5 shadow-sm">

@@ -8,6 +8,35 @@ import (
 	"time"
 )
 
+// storedAtFormat is a fixed-width RFC3339 with nanoseconds. TTL expiry is
+// evaluated in SQL (`WHERE storedAt < ?` / `WHERE storedAt >= ?`), so the
+// comparison is a string compare on the stored text: plain time.RFC3339
+// truncates to whole seconds, which makes every row written in the same second
+// as the cutoff compare equal, so an expired row never sorts before the cutoff
+// and neither the janitor nor Hydrate ever removes it. This mirrors
+// db.rotationTimestampFormat, which carries the same reasoning for lastUsedAt.
+// Values written by older builds are second-precision RFC3339 and still parse,
+// but they expire a whole second late — acceptable for a cache.
+const storedAtFormat = "2006-01-02T15:04:05.000000000Z07:00"
+
+// formatStoredAt renders a timestamp in the fixed-width form written to the
+// storedAt column.
+func formatStoredAt(t time.Time) string {
+	return t.UTC().Format(storedAtFormat)
+}
+
+// parseStoredAt reads back a storedAt value written by any version of this
+// package: the fixed-width format first, then the plain RFC3339 older builds
+// wrote.
+func parseStoredAt(value string) (time.Time, bool) {
+	for _, layout := range []string{storedAtFormat, time.RFC3339} {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t.UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
+
 // PersistentLRUStore wraps an in-memory LRUStore with SQLite disk persistence.
 type PersistentLRUStore struct {
 	lru         *LRUStore
@@ -69,7 +98,7 @@ func (p *PersistentLRUStore) Hydrate(ctx context.Context) error {
 
 	cutoff := ""
 	if p.ttl > 0 {
-		cutoff = time.Now().Add(-p.ttl).UTC().Format(time.RFC3339)
+		cutoff = formatStoredAt(time.Now().Add(-p.ttl))
 	}
 
 	query := `
@@ -94,8 +123,8 @@ FROM semanticCacheEntries`
 			hitCount, tokensSaved                 int64
 		)
 		if err := rows.Scan(&key, &model, &body, &contentType, &storedAtStr, &hitCount, &tokensSaved); err == nil {
-			storedAt, _ := time.Parse(time.RFC3339, storedAtStr)
-			if storedAt.IsZero() {
+			storedAt, ok := parseStoredAt(storedAtStr)
+			if !ok {
 				storedAt = time.Now()
 			}
 			_ = p.lru.Put(ctx, key, Entry{
@@ -123,7 +152,7 @@ func (p *PersistentLRUStore) Put(ctx context.Context, key string, e Entry) error
 		return err
 	}
 	if p.db != nil {
-		storedAtStr := e.StoredAt.UTC().Format(time.RFC3339)
+		storedAtStr := formatStoredAt(e.StoredAt)
 		_, _ = p.db.ExecContext(ctx, `
 INSERT OR REPLACE INTO semanticCacheEntries (
 	key, model, responseBody, contentType, storedAt, hitCount, tokensSaved
@@ -184,7 +213,7 @@ func (p *PersistentLRUStore) InvalidateByModel(ctx context.Context, model string
 func (p *PersistentLRUStore) InvalidateOlderThan(ctx context.Context, d time.Duration) int {
 	count := p.lru.InvalidateOlderThan(ctx, d)
 	if p.db != nil {
-		cutoff := time.Now().Add(-d).UTC().Format(time.RFC3339)
+		cutoff := formatStoredAt(time.Now().Add(-d))
 		_, _ = p.db.ExecContext(ctx, `DELETE FROM semanticCacheEntries WHERE storedAt < ?`, cutoff)
 	}
 	return count

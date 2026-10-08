@@ -19,7 +19,7 @@
     "tailLines": 50
   },
   "preserve": {
-    "errorPatterns": ["^diff --git ", "^@@ ", "^[+-](?![+-]{2})"],
+    "errorPatterns": ["^diff --git ", "^@@ ", "^[+-][^-+]"],
     "summaryPatterns": []
   },
   "tests": [
