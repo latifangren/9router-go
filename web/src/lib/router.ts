@@ -101,10 +101,6 @@ const ROUTE_TO_TAB: Record<string, ActiveTab> = {
   '/dashboard/token-saver': 'token-saver',
   '/token-saver': 'token-saver',
 
-  // cache analytics
-  '/dashboard/cache': 'cache',
-  '/cache': 'cache',
-
   // cli-tools
   '/dashboard/cli-tools': 'cli-tools',
   '/cli-tools': 'cli-tools',
