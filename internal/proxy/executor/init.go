@@ -46,8 +46,8 @@ func RegisterAll() {
 	Register("codebuddy-cn", func() Executor { return ForwardCodebuddyCN })
 	Register("codebuddy-intl", func() Executor { return ForwardCodebuddyCN })
 	Register("gitlab", func() Executor { return ForwardOpenAI })
-	Register("glm-cn", func() Executor { return ForwardOpenAI })
-	Register("glm", func() Executor { return ForwardOpenAI })
+	Register("glm-cn", func() Executor { return ForwardZai })
+	Register("glm", func() Executor { return ForwardZai })
 	Register("nebius", func() Executor { return ForwardOpenAI })
 	Register("minimax", func() Executor { return ForwardOpenAI })
 	Register("kimi", func() Executor { return ForwardOpenAI })
@@ -63,6 +63,11 @@ func RegisterAll() {
 	Register("iflow", func() Executor { return ForwardIflow })
 	Register("kimchi", func() Executor { return ForwardKimchi })
 	Register("kiro", func() Executor { return ForwardKiro })
+	// One executor serves both Bedrock entries: the registry entry's Format picks the
+	// wire shape (Anthropic Messages vs OpenAI Chat Completions), the way one Vertex
+	// executor serves vertex and vertex-partner.
+	Register("bedrock", func() Executor { return ForwardBedrock })
+	Register("bedrock-xai", func() Executor { return ForwardBedrock })
 	Register("azure", func() Executor { return ForwardAzure })
 	Register("commandcode", func() Executor { return ForwardCommandcode })
 	Register("qoder", func() Executor { return ForwardQoder })
@@ -84,4 +89,6 @@ func RegisterAll() {
 	Register("trae", func() Executor { return ForwardTrae })
 	Register("windsurf", func() Executor { return ForwardWindsurf })
 	Register("zed", func() Executor { return ForwardOpenAI })
+	Register("minimax-code", func() Executor { return ForwardMinimaxCode })
+	Register("minimax-code-global", func() Executor { return ForwardMinimaxCode })
 }

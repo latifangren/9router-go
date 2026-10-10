@@ -29,6 +29,8 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "assemblyai": "aai",
   "aws-polly": "aws-polly",
   "azure": "azure",
+  "bedrock": "br",
+  "bedrock-xai": "brx",
   "baidu": "qianfan",
   "bazaarlink": "bzl",
   "black-forest-labs": "bfl",
@@ -82,6 +84,8 @@ export const PROVIDER_ID_TO_ALIAS: Record<string, string> = {
   "mimo-free": "mmf",
   "minimax": "minimax",
   "minimax-cn": "minimax-cn",
+  "minimax-code": "mmc",
+  "minimax-code-global": "mmg",
   "mistral": "mistral",
   "mmf": "mmf",
   "muse": "muse",
@@ -172,6 +176,62 @@ const FREEBUFF_MODELS: ProviderModel[] = [
 
 export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
   "fb": FREEBUFF_MODELS,
+  "br": [
+    {
+      "id": "us.anthropic.claude-opus-5",
+      "name": "Claude Opus 5"
+    },
+    {
+      "id": "us.anthropic.claude-sonnet-5",
+      "name": "Claude Sonnet 5"
+    },
+    {
+      "id": "us.anthropic.claude-fable-5",
+      "name": "Claude Fable 5"
+    },
+    {
+      "id": "us.anthropic.claude-opus-4-8",
+      "name": "Claude Opus 4.8"
+    },
+    {
+      "id": "us.anthropic.claude-opus-4-7",
+      "name": "Claude Opus 4.7"
+    },
+    {
+      "id": "us.anthropic.claude-sonnet-4-6",
+      "name": "Claude Sonnet 4.6"
+    },
+    {
+      "id": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+      "name": "Claude Opus 4.5"
+    },
+    {
+      "id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "name": "Claude Sonnet 4.5"
+    },
+    {
+      "id": "us.anthropic.claude-opus-4-1-20250805-v1:0",
+      "name": "Claude Opus 4.1"
+    },
+    {
+      "id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+      "name": "Claude Sonnet 4"
+    },
+    {
+      "id": "us.anthropic.claude-3-haiku-20240307-v1:0",
+      "name": "Claude 3 Haiku"
+    }
+  ],
+  "brx": [
+    {
+      "id": "us.xai.grok-4.6",
+      "name": "Grok 4.6"
+    },
+    {
+      "id": "global.xai.grok-4.6",
+      "name": "Grok 4.6 (global)"
+    }
+  ],
   "freebuff": FREEBUFF_MODELS,
   "alicode-intl": [
     {
@@ -331,20 +391,8 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "upstreamModelId": "gemini-3.6-flash-tiered(low)"
     },
     {
-      "id": "gemini-3.5-flash-high",
-      "name": "Gemini 3.5 Flash (High)"
-    },
-    {
-      "id": "gemini-3-flash-agent",
-      "name": "Gemini 3.5 Flash (High)"
-    },
-    {
-      "id": "gemini-3.5-flash-low",
-      "name": "Gemini 3.5 Flash (Medium)"
-    },
-    {
-      "id": "gemini-3.5-flash-extra-low",
-      "name": "Gemini 3.5 Flash (Low)"
+      "id": "gemini-3.1-pro-high",
+      "name": "Gemini 3.1 Pro (High)"
     },
     {
       "id": "gemini-pro-agent",
@@ -353,6 +401,46 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "gemini-3.1-pro-low",
       "name": "Gemini 3.1 Pro (Low)"
+    },
+    {
+      "id": "claude-sonnet-5-5-high",
+      "name": "Claude Sonnet 5.5 (High)",
+      "upstreamModelId": "claude-sonnet-5-5-high(high)"
+    },
+    {
+      "id": "claude-sonnet-5-5-medium",
+      "name": "Claude Sonnet 5.5 (Medium)",
+      "upstreamModelId": "claude-sonnet-5-5-medium(medium)"
+    },
+    {
+      "id": "claude-sonnet-5-5-low",
+      "name": "Claude Sonnet 5.5 (Low)",
+      "upstreamModelId": "claude-sonnet-5-5-low(low)"
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "name": "Claude Sonnet 5.5 (Thinking)",
+      "upstreamModelId": "claude-sonnet-5-5-high(high)"
+    },
+    {
+      "id": "claude-opus-5-5-high",
+      "name": "Claude Opus 5.5 (High)",
+      "upstreamModelId": "claude-opus-5-5-high(high)"
+    },
+    {
+      "id": "claude-opus-5-5-medium",
+      "name": "Claude Opus 5.5 (Medium)",
+      "upstreamModelId": "claude-opus-5-5-medium(medium)"
+    },
+    {
+      "id": "claude-opus-5-5-low",
+      "name": "Claude Opus 5.5 (Low)",
+      "upstreamModelId": "claude-opus-5-5-low(low)"
+    },
+    {
+      "id": "claude-opus-5-5",
+      "name": "Claude Opus 5.5 (Thinking)",
+      "upstreamModelId": "claude-opus-5-5-high(high)"
     },
     {
       "id": "claude-sonnet-4-6",
@@ -365,11 +453,6 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     {
       "id": "gpt-oss-120b-medium",
       "name": "GPT-OSS 120B (Medium)"
-    },
-    {
-      "id": "gemini-3-flash",
-      "name": "Gemini 3 Flash",
-      "thinking": false
     },
     {
       "id": "gemini-3.1-flash-image",
@@ -713,6 +796,11 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
     }
   ],
   "cloudflare-ai": [
+    {
+      "id": "@cf/cloudflare/clef-flash",
+      "name": "Clef Flash",
+      "kind": "systemone"
+    },
     {
       "id": "@cf/meta/llama-3.2-1b-instruct",
       "name": "Llama 3.2 1B Instruct"
@@ -2903,6 +2991,58 @@ export const BUILTIN_MODELS_BY_PROVIDER: Record<string, ProviderModel[]> = {
       "id": "speech-01-turbo",
       "name": "Speech 01 Turbo",
       "kind": "tts"
+    }
+  ],
+  "minimax-code": [
+    {
+      "id": "MiniMax-M3.1-Flash-Preview",
+      "name": "MiniMax M3.1 Flash Preview",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    },
+    {
+      "id": "MiniMax-M3",
+      "name": "MiniMax M3",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    },
+    {
+      "id": "MiniMax-M2.7",
+      "name": "MiniMax M2.7",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    },
+    {
+      "id": "MiniMax-M2.7-highspeed",
+      "name": "MiniMax M2.7 Highspeed",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    }
+  ],
+  "minimax-code-global": [
+    {
+      "id": "MiniMax-M3.1-Flash-Preview",
+      "name": "MiniMax M3.1 Flash Preview",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    },
+    {
+      "id": "MiniMax-M3",
+      "name": "MiniMax M3",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    },
+    {
+      "id": "MiniMax-M2.7",
+      "name": "MiniMax M2.7",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
+    },
+    {
+      "id": "MiniMax-M2.7-highspeed",
+      "name": "MiniMax M2.7 Highspeed",
+      "targetFormat": "claude",
+      "supportedFormats": ["claude"]
     }
   ],
   "mistral": [

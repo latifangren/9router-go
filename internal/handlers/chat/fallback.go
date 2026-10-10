@@ -16,13 +16,13 @@ import (
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/middleware"
+	"9router/proxy/internal/observ"
 	"9router/proxy/internal/providers"
 	internalproxy "9router/proxy/internal/proxy"
 	"9router/proxy/internal/proxy/executor"
 	"9router/proxy/internal/tokensaver"
 	"9router/proxy/internal/tracing"
 	"9router/proxy/internal/translator"
-	"9router/proxy/internal/observ"
 	"9router/proxy/internal/usagetracker"
 )
 
@@ -43,7 +43,7 @@ func (h *ChatHandler) handleAccountFallback(
 ) error {
 	body = repairToolCallIDsInJSON(body)
 	if pinnedConnectionID != "" {
-		connObj, connData, err := h.getBestConnection(provider, pinnedConnectionID, nil, model)
+		connObj, connData, err := h.getBestConnectionWithContext(ctx, provider, pinnedConnectionID, nil, model)
 		if err != nil {
 			return fmt.Errorf("pinned connection %s: %w", pinnedConnectionID, err)
 		}
@@ -56,7 +56,7 @@ func (h *ChatHandler) handleAccountFallback(
 		})
 	}
 
-	if !h.Repo.IsProviderAvailable(provider, model) {
+	if !handlerutil.IsProbeContext(ctx) && !h.Repo.IsProviderAvailable(provider, model) {
 		log.Warn("fallback", "skip unhealthy", "provider", provider, "model", model)
 		return fmt.Errorf("provider %s/%s is unhealthy", provider, model)
 	}
@@ -97,7 +97,7 @@ func (h *ChatHandler) handleAccountFallback(
 		if slices.Contains(excludeIDs, c.ID) {
 			continue
 		}
-		connObj, connData, err := h.getBestConnection(provider, c.ID, nil, model)
+		connObj, connData, err := h.getBestConnectionWithContext(ctx, provider, c.ID, nil, model)
 		if err != nil || connObj == nil {
 			if lastErr == nil && err != nil {
 				lastErr = err
@@ -138,12 +138,16 @@ func (h *ChatHandler) handleAccountFallback(
 			// needs is recorded before the client sees the 410 (#179). The
 			// lastErr still returns when every account is out, so a direct
 			// request keeps reporting the upstream's own body.
-			h.recordModelDeprecation(provider, model, connObj.ID, ue)
+			h.recordModelDeprecation(ctx, provider, model, connObj.ID, ue)
 			excludeIDs = append(excludeIDs, connObj.ID)
 			lastErr = ue
 			continue
 		}
 		if errors.As(lastErr, &ue) && providers.RetryableStatusCodes[ue.StatusCode] {
+			if handlerutil.IsProbeContext(ctx) {
+				excludeIDs = append(excludeIDs, connObj.ID)
+				continue
+			}
 			// Extract error text from upstream body for classification
 			errorText := extractErrorText(ue.Body)
 			// Get current backoff level from this connection
@@ -164,8 +168,8 @@ func (h *ChatHandler) handleAccountFallback(
 			// selector can skip this account before spending a request
 			// (upstream applyErrorState). Only lock if error is account-scoped,
 			// not model-scoped (e.g. 401 auth issues), so unrelated models stay available.
-			if isModelScopedQuotaError(ue.StatusCode, errorText, model) {
-				if recErr := h.Repo.RecordConnectionError(connObj.ID, ue.StatusCode, errorText, classification.NewBackoffLevel); recErr != nil {
+			if isModelScopedError(ue.StatusCode, errorText, model) {
+				if recErr := h.Repo.RecordConnectionScopedError(connObj.ID, model, "chat", ue.StatusCode, errorText, classification.NewBackoffLevel); recErr != nil {
 					log.Warn("fallback", "record connection error failed", "conn", connObj.ID, "error", recErr)
 				}
 			} else {
@@ -193,6 +197,12 @@ func (h *ChatHandler) handleAccountFallback(
 // isAnthropicUpstream reports whether the request is headed to Anthropic's
 // native Messages API (as opposed to an anthropic-compatible custom node).
 func isAnthropicUpstream(provider string, cfg *providers.ProviderConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	if cfg.UpstreamIsAnthropic {
+		return true
+	}
 	if provider != "claude" && provider != "anthropic" {
 		return false
 	}
@@ -207,6 +217,19 @@ func isAnthropicUpstream(provider string, cfg *providers.ProviderConfig) bool {
 	}
 	return targetURL == "https://api.anthropic.com/v1/messages" ||
 		strings.HasPrefix(targetURL, "https://api.anthropic.com/v1/messages?")
+}
+
+// servesClaudeMessages reports whether the provider's own endpoint speaks
+// Anthropic Messages, so the body reaches it in Claude format and the reply
+// comes back Claude-shaped.
+//
+// That is a different question from isAnthropicUpstream: Anthropic's own API
+// additionally needs the beta query, the OAuth cloaking and the beta-flag
+// merge below, none of which a third-party Messages endpoint wants. A provider
+// declares the wire format on its registry entry (Format: "claude"), which is
+// the same field the /v1/models metadata publishes.
+func servesClaudeMessages(provider string, cfg *providers.ProviderConfig) bool {
+	return cfg != nil && cfg.Format == providers.FormatClaude
 }
 
 func appendBetaQuery(u string) string {
@@ -241,6 +264,7 @@ type forwardRequestParams struct {
 	TranslateResponse bool
 	Endpoint          string
 }
+
 func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	ctx, w := f.Ctx, f.W
 	provider, model := f.Provider, f.Model
@@ -316,17 +340,28 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 	// requests for non-Anthropic providers (DeepSeek, OpenAI-compatible) to
 	// OpenAI format before the fallback, and passing endpoint "/v1/v1/messages"
 	// alone would wrongly inject a top-level "system" the upstream ignores.
-	claudeNative := isAnthropic && (endpoint == "/v1/v1/messages" || endpoint == "/v1/messages")
+	//
 	// A /v1/messages client is only converted away from Claude format when the
-	// upstream cannot answer in it. opencode-zen routes the Claude and Qwen
-	// models to its own /zen/v1/messages endpoint, so those requests keep the
-	// client's own wire format end to end (upstream resolveTransport picks the
-	// sourceFormat-matched transport and skips translation).
-	if endpoint == "/v1/v1/messages" || endpoint == "/v1/messages" {
-		if executor.ServesMessagesEndpoint(provider, model) {
-			claudeNative = true
-		}
-	}
+	// upstream cannot answer in it. That is true of two kinds of provider: one
+	// routing some of its models to a Messages endpoint (opencode-zen's Claude
+	// and Qwen lanes), and one whose own endpoint speaks Messages outright
+	// (minimax-code on MiniMax's mavis gateway). Both keep the client's own
+	// wire format end to end — upstream resolveTransport picks the
+	// sourceFormat-matched transport and skips translation.
+	messagesClient := endpoint == "/v1/v1/messages" || endpoint == "/v1/messages"
+	// A Messages-speaking provider answers a Messages client in its own wire
+	// format, whichever of the two ways it earns that: a model routed to a
+	// Messages endpoint (opencode-zen's Claude and Qwen lanes), or an endpoint
+	// that speaks Messages outright (minimax-code on the mavis gateway).
+	claudeNative := messagesClient && (isAnthropic ||
+		executor.ServesMessagesEndpoint(provider, model) ||
+		servesClaudeMessages(provider, providerCfg))
+
+	// upstreamClaude is what the executor needs to translate the Claude reply
+	// back for a Chat Completions client. Anthropic's own API and a third-party
+	// Messages endpoint both answer in Claude, but only Anthropic's wants the
+	// beta query, the OAuth cloaking and the beta-flag merge below.
+	upstreamClaude := isAnthropic || servesClaudeMessages(provider, providerCfg)
 	compressStart := time.Now()
 	pipedBody, origTokens, savedTokens, savedPct := h.applyTokenSavers(body, claudeNative)
 	compressDurMs := int(time.Since(compressStart).Milliseconds())
@@ -334,7 +369,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		compressDurMs = 1
 	}
 	var claudeToolMap map[string]string
-	if isAnthropic {
+	if upstreamClaude {
 		if !claudeNative {
 			// Raw OpenAI-format body would be invalid at the Messages API:
 			// convert to a spec-compliant Claude payload (top-level system,
@@ -468,16 +503,16 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		connName, connEmail := identityNames(h.connIdentityKVOr(f, connectionID))
 		h.LogFailure(
 			&UsageLogInfo{
-				Provider:            provider,
-				Model:               model,
-				ConnectionID:        connectionID,
-				ConnName:            connName,
-				ConnEmail:           connEmail,
-				Endpoint:            endpoint,
-				Egress:              resolveEgress(connData, providerCfg).LogValue(),
-				OriginalInputTokens: origTokens,
-				SavedTokens:         savedTokens,
-				SavedPercent:        savedPct,
+				Provider:              provider,
+				Model:                 model,
+				ConnectionID:          connectionID,
+				ConnName:              connName,
+				ConnEmail:             connEmail,
+				Endpoint:              endpoint,
+				Egress:                resolveEgress(connData, providerCfg).LogValue(),
+				OriginalInputTokens:   origTokens,
+				SavedTokens:           savedTokens,
+				SavedPercent:          savedPct,
 				CompressionDurationMs: compressDurMs,
 			},
 			nil,
@@ -548,7 +583,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 			ConnectionID:   connectionID,
 			SessionID:      sessionID,
 			ToolNameMap:    claudeToolMap,
-			UpstreamClaude: isAnthropic && !claudeNative,
+			UpstreamClaude: upstreamClaude && !claudeNative,
 			ResponseBuf:    &metrics.ResponseBuf,
 			StartTime:      start,
 			TTFT:           &metrics.TTFT,
@@ -594,7 +629,7 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 					ConnectionID:   connectionID,
 					SessionID:      sessionID,
 					ToolNameMap:    claudeToolMap,
-					UpstreamClaude: isAnthropic && !claudeNative,
+					UpstreamClaude: upstreamClaude && !claudeNative,
 					ResponseBuf:    &metrics.ResponseBuf,
 					StartTime:      start,
 					TTFT:           &metrics.TTFT,
@@ -660,28 +695,30 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 
 	usage := translator.GetAndClearUsage(ctx)
 	if completed {
-		// Clear any existing model lock on success (matching Next.js clearAccountError).
-		lockKey := canonicalLockModel(provider, model)
-		if unlockErr := h.Repo.UnlockConnectionModel(connectionID, lockKey); unlockErr != nil {
-			log.Warn("fallback", "unlock failed", "provider", provider, "model", lockKey, "error", unlockErr)
+		if !handlerutil.IsProbeContext(ctx) {
+			// Clear any existing model lock on success (matching Next.js clearAccountError).
+			lockKey := canonicalLockModel(provider, model)
+			if unlockErr := h.Repo.UnlockConnectionModel(connectionID, lockKey); unlockErr != nil {
+				log.Warn("fallback", "unlock failed", "provider", provider, "model", lockKey, "error", unlockErr)
+			}
+			if lockKey != model {
+				_ = h.Repo.UnlockConnectionModel(connectionID, model)
+			}
+			// A served request also clears the account-scoped cooldown, so an
+			// account that recovered is not kept out of rotation until the
+			// cooldown expires on its own.
+			if clearErr := h.Repo.ClearConnectionRateLimit(connectionID); clearErr != nil {
+				log.Warn("fallback", "rate limit clear failed", "conn", connectionID, "error", clearErr)
+			}
+			// A served request proves the account is usable again, so drop any
+			// cached quota block rather than leaving it to expire on its own.
+			if provider == "codex" {
+				ClearCodexQuotaBlock(connectionID)
+			}
+			// A served request proves the model is alive, so a badge recorded by
+			// an earlier 410 must not outlive it (#179).
+			h.clearModelDeprecation(provider, model)
 		}
-		if lockKey != model {
-			_ = h.Repo.UnlockConnectionModel(connectionID, model)
-		}
-		// A served request also clears the account-scoped cooldown, so an
-		// account that recovered is not kept out of rotation until the
-		// cooldown expires on its own.
-		if clearErr := h.Repo.ClearConnectionRateLimit(connectionID); clearErr != nil {
-			log.Warn("fallback", "rate limit clear failed", "conn", connectionID, "error", clearErr)
-		}
-		// A served request proves the account is usable again, so drop any
-		// cached quota block rather than leaving it to expire on its own.
-		if provider == "codex" {
-			ClearCodexQuotaBlock(connectionID)
-		}
-		// A served request proves the model is alive, so a badge recorded by
-		// an earlier 410 must not outlive it (#179).
-		h.clearModelDeprecation(provider, model)
 		if usage == nil {
 			usage = &translator.OpenAIUsage{}
 		}
@@ -702,17 +739,17 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 		}
 
 		logInfo := &UsageLogInfo{
-			Provider:               provider,
-			Model:                  model,
-			RequestedModel:         reqModel,
-			ComboName:              f.ComboName,
-			Protocol:               protocol,
-			CacheSource:            resolveCacheSource(usage),
-			StartedAt:              startedAt,
-			ConnectionID:           connectionID,
-			APIKey:                 apiKey,
-			Endpoint:               endpoint,
-			Egress:                 resolveEgress(connData, providerCfg).LogValue(),
+			Provider:              provider,
+			Model:                 model,
+			RequestedModel:        reqModel,
+			ComboName:             f.ComboName,
+			Protocol:              protocol,
+			CacheSource:           resolveCacheSource(usage),
+			StartedAt:             startedAt,
+			ConnectionID:          connectionID,
+			APIKey:                apiKey,
+			Endpoint:              endpoint,
+			Egress:                resolveEgress(connData, providerCfg).LogValue(),
 			OriginalInputTokens:   origTokens,
 			SavedTokens:           savedTokens,
 			SavedPercent:          savedPct,
@@ -755,18 +792,18 @@ func (h *ChatHandler) tryForwardWithConnection(f forwardRequestParams) error {
 
 	h.LogFailure(
 		&UsageLogInfo{
-			Provider:               provider,
-			Model:                  model,
-			RequestedModel:         reqModel,
-			ComboName:              f.ComboName,
-			Protocol:               protocol,
-			StartedAt:              startedAt,
-			ConnectionID:           connectionID,
-			ConnName:               connName,
-			ConnEmail:              connEmail,
-			APIKey:                 apiKey,
-			Endpoint:               endpoint,
-			Egress:                 resolveEgress(connData, providerCfg).LogValue(),
+			Provider:              provider,
+			Model:                 model,
+			RequestedModel:        reqModel,
+			ComboName:             f.ComboName,
+			Protocol:              protocol,
+			StartedAt:             startedAt,
+			ConnectionID:          connectionID,
+			ConnName:              connName,
+			ConnEmail:             connEmail,
+			APIKey:                apiKey,
+			Endpoint:              endpoint,
+			Egress:                resolveEgress(connData, providerCfg).LogValue(),
 			OriginalInputTokens:   origTokens,
 			SavedTokens:           savedTokens,
 			SavedPercent:          savedPct,
@@ -1102,23 +1139,81 @@ func claudeSessionIDFromBody(body []byte) string {
 	return extractClaudeSessionIdFromUserId(userID)
 }
 
-// isModelScopedQuotaError reports whether an upstream retryable error is
-// a model-specific quota exhaustion (e.g. Antigravity Claude QUOTA_EXHAUSTED)
-// rather than an account-scoped rate limit or credential failure.
-// For model-scoped quota exhaustion, only LockConnectionModel should be set
-// so that unrelated healthy models (e.g. Gemini) on the same account remain available.
-func isModelScopedQuotaError(statusCode int, errorText string, model string) bool {
+func isAccountAuthFailure(lower string) bool {
+	return strings.Contains(lower, "no credentials") ||
+		strings.Contains(lower, "invalid_grant") ||
+		strings.Contains(lower, "invalid token") ||
+		strings.Contains(lower, "token type is not supported") ||
+		strings.Contains(lower, "authentication expired") ||
+		strings.Contains(lower, "token expired") ||
+		strings.Contains(lower, "account suspended") ||
+		strings.Contains(lower, "account disabled") ||
+		strings.Contains(lower, "incorrect api key") ||
+		strings.Contains(lower, "invalid api key") ||
+		strings.Contains(lower, "organization is not supported") ||
+		strings.Contains(lower, "insufficient funds for organization")
+}
+
+func isModelQuotaText(errorText string) bool {
+	upper := strings.ToUpper(errorText)
+	return strings.Contains(upper, "QUOTA_EXHAUSTED") ||
+		strings.Contains(errorText, "Individual quota reached") ||
+		strings.Contains(upper, "MODEL_CAPACITY_EXHAUSTED")
+}
+
+func mentionsGate(lower string) bool {
+	return strings.Contains(lower, "is not supported") ||
+		strings.Contains(lower, "not supported") ||
+		strings.Contains(lower, "model access is disabled") ||
+		strings.Contains(lower, "endpoint is unavailable")
+}
+
+// isModelScopedError reports whether an upstream retryable error is
+// specific to the requested model (e.g. 429 model quota, 402 insufficient funds
+// for paid models, or 401 "model is not supported") rather than an account-scoped
+// credential failure. For model-scoped errors, only LockConnectionModel and
+// RecordConnectionError are set so that unrelated healthy models on the same account
+// remain available.
+func isModelScopedError(statusCode int, errorText string, model string) bool {
 	if model == "" {
 		return false
 	}
-	if statusCode != http.StatusTooManyRequests && statusCode != http.StatusForbidden && statusCode != http.StatusServiceUnavailable {
+	lower := strings.ToLower(errorText)
+	if isAccountAuthFailure(lower) {
 		return false
 	}
-	upper := strings.ToUpper(errorText)
-	if strings.Contains(upper, "QUOTA_EXHAUSTED") ||
-		strings.Contains(errorText, "Individual quota reached") ||
-		strings.Contains(upper, "MODEL_CAPACITY_EXHAUSTED") {
+
+	// 1. Quota exhaustion markers (Antigravity Claude, etc.) on 429/403/503
+	if statusCode == http.StatusTooManyRequests || statusCode == http.StatusForbidden || statusCode == http.StatusServiceUnavailable {
+		if isModelQuotaText(errorText) {
+			return true
+		}
+	}
+
+	// 2. Model-gate verdicts only ever arrive on 400/401/402/403.
+	// A 5xx that merely says "not supported" is a node fault, not a model gate.
+	switch statusCode {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden:
+	default:
+		return false
+	}
+
+	// 402 Insufficient account funds on providers serving tiered models (e.g. Zen paid models)
+	if statusCode == http.StatusPaymentRequired {
+		if (strings.Contains(lower, "insufficient account funds") || strings.Contains(lower, "insufficient funds")) &&
+			!strings.Contains(lower, "credits are exhausted") && !strings.Contains(lower, "spending limit") {
+			return true
+		}
+	}
+
+	// 401/400/403: Body must name the requested model AND mention that the model is unsupported/disabled
+	cleanModel := strings.ToLower(model)
+	if idx := strings.LastIndex(cleanModel, "/"); idx != -1 {
+		cleanModel = cleanModel[idx+1:]
+	}
+	if (strings.Contains(lower, cleanModel) || strings.Contains(lower, strings.ToLower(model))) && mentionsGate(lower) {
 		return true
 	}
+
 	return false
 }
