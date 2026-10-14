@@ -9,19 +9,37 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"9router/proxy/internal/constants"
 	"9router/proxy/internal/db"
 	"9router/proxy/internal/handlers/shared"
-
 	"9router/proxy/internal/handlerutil"
 	"9router/proxy/internal/log"
 	"9router/proxy/internal/middleware"
+	"9router/proxy/internal/observ"
 	"9router/proxy/internal/pricing"
 	"9router/proxy/internal/translator"
 	"9router/proxy/internal/usagetracker"
-	"9router/proxy/internal/observ"
 )
+
+// shouldLogRequestDetail checks if request detail logging is enabled by settings.
+func shouldLogRequestDetail(repo *db.Repo, isError bool) bool {
+	if repo == nil {
+		return true
+	}
+	settings, err := repo.GetSettings()
+	if err != nil || settings == nil {
+		return true
+	}
+	if settings.ObservabilityMode == "off" {
+		return false
+	}
+	if settings.ObservabilityMode == "errors_only" && !isError {
+		return false
+	}
+	return true
+}
 
 var dailyUsageMu sync.Mutex
 
@@ -80,7 +98,7 @@ func (h *ChatHandler) LogFailure(
 	if metrics != nil {
 		responseContent = metrics.ResponseBuf.String()
 		if len(responseContent) > constants.MaxResponseContentLen {
-			responseContent = responseContent[:constants.MaxResponseContentLen] + "...[truncated]"
+			responseContent = truncateDetailText(responseContent, constants.MaxResponseContentLen, "...[truncated]")
 		}
 	}
 	startedAt := info.StartedAt
@@ -116,15 +134,17 @@ func (h *ChatHandler) LogFailure(
 	if marshalErr != nil {
 		return
 	}
-	if insertErr := h.Repo.InsertRequestDetail(
-		reqID,
-		info.Provider,
-		info.Model,
-		info.ConnectionID,
-		"error",
-		string(reqData),
-	); insertErr != nil {
-		log.Error("usage", "insert failed request detail failed", "error", insertErr)
+	if shouldLogRequestDetail(h.Repo, true) {
+		if insertErr := h.Repo.InsertRequestDetail(
+			reqID,
+			info.Provider,
+			info.Model,
+			info.ConnectionID,
+			"error",
+			string(reqData),
+		); insertErr != nil {
+			log.Error("usage", "insert failed request detail failed", "error", insertErr)
+		}
 	}
 
 	observ.RecordRequest(info.Provider, info.Model, info.Endpoint, statusCode)
@@ -139,11 +159,39 @@ func metricsTTFT(metrics *streamMetrics) int64 {
 }
 
 func sanitizeDetailError(message string) string {
-	if len(message) > maxPersistedErrorLen {
-		return message[:maxPersistedErrorLen] + "...[truncated]"
-	}
-	return message
+	return truncateDetailText(message, maxPersistedErrorLen, "...[truncated]")
 }
+
+// truncateDetailText bounds text stored in a request-detail row.
+//
+// The cut is by byte, so it can land inside a multi-byte rune and leave a
+// fragment that is no longer valid UTF-8. encoding/json/v2 — the marshaler
+// used for these rows — rejects such a string outright instead of replacing
+// the bad bytes as encoding/json v1 did, so one CJK or emoji character
+// straddling the limit used to fail the whole marshal and silently drop the
+// row, the daily aggregate and the recent-requests entry with it.
+//
+// Invalid bytes are scrubbed on the untruncated path too: a value that
+// arrived already malformed is just as fatal to the marshal as one this
+// function damaged. The ContainsFunc guard keeps that path free — measured
+// at 0 allocs/op — by returning the original string when nothing needs
+// fixing. The truncated path allocates once for the concatenated result,
+// which is what the bare s[:max] + suffix did as well.
+func truncateDetailText(s string, max int, suffix string) string {
+	if len(s) > max {
+		if !strings.ContainsFunc(s[:max], isInvalidRune) {
+			return s[:max] + suffix
+		}
+		return strings.ToValidUTF8(s[:max], "") + suffix
+	}
+	if !strings.ContainsFunc(s, isInvalidRune) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "")
+}
+
+// isInvalidRune reports whether r is a byte sequence Go could not decode.
+func isInvalidRune(r rune) bool { return r == utf8.RuneError }
 
 // LogUsage is the exported method to persist a usage record and update connection metadata.
 func (h *ChatHandler) LogUsage(ctx context.Context, info *UsageLogInfo, usage *translator.OpenAIUsage, latencyMs int64, requestBody []byte, metrics *streamMetrics) {
@@ -162,7 +210,7 @@ func (h *ChatHandler) logUsage(ctx context.Context, info *UsageLogInfo, usage *t
 		ttftMs = metrics.TTFT
 		respContent = metrics.ResponseBuf.String()
 		if len(respContent) > constants.MaxResponseContentLen {
-			respContent = respContent[:constants.MaxResponseContentLen] + "...[truncated]"
+			respContent = truncateDetailText(respContent, constants.MaxResponseContentLen, "...[truncated]")
 		}
 	}
 
@@ -310,8 +358,10 @@ func (h *ChatHandler) logUsage(ctx context.Context, info *UsageLogInfo, usage *t
 		log.Error("usage", "marshal request detail failed", "error", err)
 		return
 	}
-	if err := h.Repo.InsertRequestDetail(reqID, info.Provider, info.Model, info.ConnectionID, "success", string(reqData)); err != nil {
-		log.Error("usage", "insert request detail failed", "error", err)
+	if shouldLogRequestDetail(h.Repo, false) {
+		if err := h.Repo.InsertRequestDetail(reqID, info.Provider, info.Model, info.ConnectionID, "success", string(reqData)); err != nil {
+			log.Error("usage", "insert request detail failed", "error", err)
+		}
 	}
 
 	h.upsertDailyUsage(info.Provider, info.Model, info.Endpoint, info.ConnectionID, info.APIKey, usage.PromptTokens, usage.CompletionTokens, cachedTokens, cost)
@@ -336,9 +386,7 @@ func extractRequestMessages(body []byte) []map[string]string {
 	msgs := make([]map[string]string, 0, len(req.Messages))
 	for _, m := range req.Messages {
 		content := extractContent(m.Content)
-		if len(content) > constants.MaxMessageContentLen {
-			content = content[:constants.MaxMessageContentLen] + "..."
-		}
+		content = truncateDetailText(content, constants.MaxMessageContentLen, "...")
 		msgs = append(msgs, map[string]string{"role": m.Role, "content": content})
 	}
 	if len(msgs) > constants.MaxLoggedMessages {

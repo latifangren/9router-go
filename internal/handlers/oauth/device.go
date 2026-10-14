@@ -21,7 +21,7 @@ import (
 // kimi-coding aliases to kimi (dual-auth merge, like upstream).
 var deviceProviders = []string{
 	"qoder", "qoder-cn", "kilocode", "grok-cli", "github", "kiro", "kimi", "kimi-coding",
-	"codebuddy-cn", "codebuddy-intl", "muse",
+	"codebuddy-cn", "codebuddy-intl", "muse", "minimax-code", "minimax-code-global",
 }
 
 func deviceSupported(p string) bool {
@@ -200,6 +200,8 @@ func deviceStart(provider, region, startURL, authMethod string) (map[string]any,
 		return codebuddyStart(provider)
 	case "muse":
 		return museStart()
+	case "minimax-code", "minimax-code-global":
+		return minimaxCodeStart(provider)
 	default:
 		return nil, fmt.Errorf("unsupported provider")
 	}
@@ -468,6 +470,8 @@ func devicePoll(provider, code string, session map[string]any) (deviceTokens, st
 		t, err = codebuddyPoll(provider, code)
 	case "muse":
 		t, err = musePoll(code)
+	case "minimax-code", "minimax-code-global":
+		t, err = minimaxCodePoll(provider, code, session)
 	default:
 		return t, "error", "unsupported provider"
 	}
@@ -522,6 +526,14 @@ func (h *OAuthHandler) saveDeviceConnection(provider string, t deviceTokens) sav
 	}
 	if h.Repo != nil && h.Repo.RawDB() != nil {
 		now := currentTimestamp()
+		if provider == "muse" {
+			// The minted Model API key rotates on every login, so without
+			// this each re-login would pile up another active row for the
+			// same account. Keep only the newest connection active.
+			_, _ = h.Repo.RawDB().Exec(
+				"UPDATE providerConnections SET isActive = 0, updatedAt = ? WHERE provider = ? AND id != ? AND isActive = 1",
+				now, provider, id)
+		}
 		raw, _ := json.Marshal(dataMap)
 		var existing string
 		err := h.Repo.RawDB().QueryRow("SELECT data FROM providerConnections WHERE id = ?", id).Scan(&existing)

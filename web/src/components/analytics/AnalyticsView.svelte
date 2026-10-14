@@ -24,7 +24,7 @@
   import UsageBreakdownTable from './UsageBreakdownTable.svelte'
   import RequestDetailsTab from './RequestDetailsTab.svelte'
   import ProviderTopologyCard from './ProviderTopologyCard.svelte'
-
+  import { emailPrivacy, formatEmailLabel } from '../../lib/privacy'
   interface Props {
     connections?: ProviderConnection[]
     providerNodes?: ProviderNode[]
@@ -273,14 +273,19 @@
   })
 
   function topologyName(providerId: string, fallbackName?: string): string {
-    const nodeName = nodeNameById.get(providerId)
+    // The fallback is a connection name, and for OAuth connections that is
+    // the account email — mask it the same way the connection lists do.
+    const nodeName = formatEmailLabel(nodeNameById.get(providerId) ?? '', $emailPrivacy)
     if (nodeName) return nodeName
     const cat = PROVIDER_CATALOG.find((p) => p.id === providerId || p.alias === providerId)
     if (cat?.name) return cat.name
+    // Only fall back to the connection label if it isn't a numeric ID (a
+    // connection label like "12") and isn't an OAuth account email: an email
+    // is the connection's identity, not the provider's name, so it must never
+    // stand in as the topology node label even with privacy masking off.
     if (fallbackName && fallbackName !== providerId) {
-      // Numeric key names (e.g. "12") are connection labels, not provider names —
-      // fall back to the raw provider id so custom nodes never render as "12".
-      if (!/^\d+$/.test(fallbackName.trim())) return fallbackName
+      const trimmed = fallbackName.trim()
+      if (!/^\d+$/.test(trimmed) && !trimmed.includes('@')) return formatEmailLabel(fallbackName, $emailPrivacy)
       return providerId
     }
     return providerId
@@ -290,6 +295,16 @@
     const seen = new Set<string>()
     const list: { id: string; alias?: string; name: string; color?: string; type: string }[] = []
 
+    // "Who is on the bus" is a usage question, so every source below is
+    // measured against the same window. The backend keys usage by the
+    // canonical provider id, while a connection row can hold either that or
+    // the published alias, so both are tried before a provider counts as idle.
+    const usedInPeriod = (provId: string) => {
+      const canonical = provId.toLowerCase().trim()
+      const cat = PROVIDER_CATALOG.find((p) => p.id.toLowerCase() === canonical || p.alias?.toLowerCase() === canonical)
+      const keys = [canonical, cat?.id, cat?.alias].filter(Boolean) as string[]
+      return keys.some((k) => (stats.byProvider?.[k]?.requests || 0) > 0)
+    }
     const addProvider = (provId: string, type: string, customName?: string) => {
       if (!provId) return
       const canonical = provId.toLowerCase().trim()
@@ -326,9 +341,15 @@
       if (r.provider) addProvider(r.provider, 'recent')
     }
 
-    // 3. Add active user-configured connections
+    // 3. Add user-configured connections, but only the ones that actually
+    //    carried traffic in the selected window. Every non-inactive row used
+    //    to be drawn here, and since that list is not usage-windowed the node
+    //    outlived both the period and the connection itself: a provider the
+    //    operator had merely configured sat on the map indefinitely as if it
+    //    were serving (#280). Gating it on the same window as every other
+    //    source is what makes the map mean what it claims to mean.
     for (const c of connections) {
-      if (c.isActive !== 0 && c.provider) {
+      if (c.isActive !== 0 && c.provider && usedInPeriod(c.provider)) {
         addProvider(c.provider, 'connection', c.name || undefined)
       }
     }
@@ -346,8 +367,6 @@
     //    reads as "who is on the bus" — including ones never routed a request.
     //    Providers with real usage already entered above via stats.byProvider,
     //    so this only has to cover the ids whose usage key the map lacks.
-    const usedInPeriod = (provId: string) =>
-      (stats.byProvider?.[provId]?.requests || 0) > 0
     const FREE_DEFAULTS = ['antigravity', 'opencode', 'nvidia', 'openrouter', 'clinepass']
     for (const f of FREE_DEFAULTS) {
       if (usedInPeriod(f)) addProvider(f, 'default')

@@ -229,12 +229,13 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 
 	// Relay deploy endpoints. Dashboard reads/writes, not engine traffic: the
 	// SPA reaches them with its session cookie, exactly like the pool CRUD
-	// above. chi prefers the static segment over {id}, so these three cannot
+	// above. chi prefers the static segment over {id}, so these four cannot
 	// be shadowed by the parameterised routes registered first.
 	relayH := media.NewMediaHandler(repo, nil, nil)
 	r.Post("/api/proxy-pools/vercel-deploy", relayH.HandleVercelDeploy)
 	r.Post("/api/proxy-pools/deno-deploy", relayH.HandleDenoDeploy)
 	r.Post("/api/proxy-pools/cloudflare-deploy", relayH.HandleCloudflareDeploy)
+	r.Post("/api/proxy-pools/netlify-deploy", relayH.HandleNetlifyDeploy)
 
 	r.Get("/api/keys", dashH.HandleGetApiKeys)
 	r.Post("/api/keys", dashH.HandleCreateApiKey)
@@ -283,6 +284,9 @@ func SetupDashboardRoutes(r chi.Router, repo *db.Repo, chatH *chat.ChatHandler) 
 	// Settings backup/restore + outbound proxy diagnostics (profile page)
 	r.Get("/api/settings/database", dashH.HandleExportDatabase)
 	r.Post("/api/settings/database", dashH.HandleImportDatabase)
+	r.Get("/api/settings/database/stats", dashH.HandleGetDatabaseStats)
+	r.Post("/api/settings/database/prune", dashH.HandlePruneDatabase)
+	r.Post("/api/settings/database/vacuum", dashH.HandleVacuumDatabase)
 	r.Post("/api/settings/proxy-test", dashH.HandleProxyTest)
 
 	// Token saver testing benches & filter catalog
@@ -536,6 +540,14 @@ func SetupServerRouter(r chi.Router, repo *db.Repo, ts *TokenSaverConfig) {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.RequireDashboardAuth(repo))
 		r.Get("/api/cli-tools/all-statuses", media.NewCLIToolsHandler().HandleAllStatuses)
+		// Hermes configuration is per-profile and writes into ~/.hermes on the
+		// operator's disk, so it belongs to the dashboard group: the SPA reaches
+		// it with the session cookie, never an engine API key.
+		hermesH := media.NewHermesHandler()
+		r.Get("/api/cli-tools/hermes-profiles", hermesH.HandleProfiles)
+		r.Get("/api/cli-tools/hermes-settings", hermesH.HandleGet)
+		r.Post("/api/cli-tools/hermes-settings", hermesH.HandlePost)
+		r.Delete("/api/cli-tools/hermes-settings", hermesH.HandleDelete)
 	})
 
 	SetupConsoleLogRoutes(r, repo)
